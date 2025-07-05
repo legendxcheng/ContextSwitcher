@@ -23,6 +23,7 @@ except ImportError:
 
 from core.task_manager import TaskManager, Task, TaskStatus
 from utils.config import get_config
+from gui.modern_config import ModernUIConfig
 
 
 class MainWindow:
@@ -55,8 +56,8 @@ class MainWindow:
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
         
-        # 设置主题
-        sg.theme(self.config.get('app.theme', 'DefaultNoMoreNagging'))
+        # 设置现代化主题
+        ModernUIConfig.setup_theme()
         
         # 创建窗口布局
         self.layout = self._create_layout()
@@ -64,107 +65,78 @@ class MainWindow:
         print("✓ 主窗口初始化完成")
     
     def _create_layout(self) -> List[List[Any]]:
-        """创建紧凑的窗口布局"""
-        # 精简标题行 - 更小的字体，紧凑布局
-        title_row = [
-            sg.Text(f"{self.app_name}", 
-                   font=("Arial", 10, "bold"),
-                   text_color="#2E86AB"),
+        """创建现代化Widget布局"""
+        colors = ModernUIConfig.COLORS
+        fonts = ModernUIConfig.FONTS
+        
+        # 去掉标题行，直接显示状态
+        status_row = [
+            sg.Text("", key="-STATUS-", font=fonts['body'], 
+                   text_color=colors['text_secondary']),
             sg.Push(),
-            sg.Text("", key="-STATUS-", font=("Arial", 8), 
-                   text_color="#666666")
+            sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12), 
+                   text_color=colors['success'], tooltip="就绪")
         ]
         
-        # 紧凑的任务表格 - 减少列数，更小字体
-        table_headings = ["#", "任务", "窗口", "时间"]
+        # 现代化任务表格
+        table_headings = ["#", "任务", "窗口", "状态"]
         table_data = []
         
         table_row = [
-            sg.Table(
+            ModernUIConfig.create_modern_table(
                 values=table_data,
                 headings=table_headings,
                 key="-TASK_TABLE-",
-                enable_events=True,
-                select_mode=sg.TABLE_SELECT_MODE_BROWSE,
-                auto_size_columns=False,
-                col_widths=[3, 25, 20, 12],  # 减少列数和宽度
-                justification="left",
-                alternating_row_color="#F8F8F8",
-                selected_row_colors="#FFFFFF on #2E86AB",
-                header_text_color="#FFFFFF",
-                header_background_color="#2E86AB",
-                header_font=("Arial", 9, "bold"),
-                font=("Arial", 8),  # 更小的字体
-                num_rows=3,  # 只显示3行
-                expand_x=True,
-                expand_y=False,  # 不允许垂直扩展
-                row_height=18,  # 设置固定行高
-                max_col_width=25  # 限制列宽
+                num_rows=4,
+                col_widths=[3, 20, 8, 6]
             )
         ]
         
-        # 紧凑的按钮行 - 更小的按钮，简化按钮
+        # 现代化按钮行
         button_row = [
-            sg.Button("+ 添加", key="-ADD_TASK-", 
-                     size=(8, 1), button_color=("#FFFFFF", "#28A745"),
-                     font=("Arial", 8)),
-            sg.Button("编辑", key="-EDIT_TASK-", 
-                     size=(6, 1), button_color=("#FFFFFF", "#007BFF"),
-                     font=("Arial", 8)),
-            sg.Button("删除", key="-DELETE_TASK-", 
-                     size=(6, 1), button_color=("#FFFFFF", "#DC3545"),
-                     font=("Arial", 8)),
+            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (3, 1), "添加任务"),
+            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (3, 1), "编辑任务"),
+            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (3, 1), "删除任务"),
             sg.Push(),
-            sg.Button("⟳", key="-REFRESH-", size=(3, 1), 
-                     font=("Arial", 10), tooltip="刷新")
+            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (3, 1), "刷新")
         ]
         
         # 极简状态行
-        status_row = [
-            sg.Text("", key="-MAIN_STATUS-", font=("Arial", 8), 
-                   text_color="#888888"),
+        bottom_row = [
+            sg.Text("", key="-MAIN_STATUS-", font=fonts['small'], 
+                   text_color=colors['text_secondary']),
             sg.Push(),
-            sg.Text("Ctrl+Alt+1-9", font=("Arial", 7), 
-                   text_color="#AAAAAA")
+            sg.Text("Ctrl+Alt+1-9", font=fonts['small'], 
+                   text_color=colors['text_disabled'])
         ]
         
-        # 紧凑布局 - 减少分隔线和边距
+        # 现代化Widget布局 - 极简设计
         layout = [
-            title_row,
+            status_row,
             table_row,
             button_row,
-            status_row
+            bottom_row
         ]
         
         return layout
     
     def create_window(self) -> sg.Window:
-        """创建窗口"""
-        # 窗口配置
-        window_config = {
-            "title": self.app_name,
-            "layout": self.layout,
-            "keep_on_top": self.window_config.get("always_on_top", True),
-            "finalize": True,
-            "resizable": False,  # 禁用调整大小
-            "grab_anywhere": True,
-            "icon": None,  # TODO: 添加应用图标
-            "margins": (3, 3),  # 更小的边距
-            "element_padding": (2, 1),  # 更小的元素间距
-            "auto_size_text": False,
-            "auto_size_buttons": False
-        }
+        """创建现代化Widget窗口"""
+        # 获取现代化Widget配置
+        window_config = ModernUIConfig.get_widget_window_config()
+        window_config['layout'] = self.layout
         
-        # 窗口位置 - 让FreeSimpleGUI自动调整大小
+        # 窗口位置和大小
         if self.window_config.get("remember_position", True):
             window_config.update({
                 "location": (
-                    self.window_config.get("x", 100),
+                    self.window_config.get("x", 200),
                     self.window_config.get("y", 100)
                 )
             })
-        
-        # 不设置固定size，让窗口自适应内容大小
+        else:
+            # 默认位置在屏幕右上角
+            window_config["location"] = (None, None)  # 让系统决定
         
         # 创建窗口
         window = sg.Window(**window_config)
@@ -303,29 +275,32 @@ class MainWindow:
             
             # 任务名称 - 限制长度
             task_name = task.name
-            if len(task_name) > 20:
-                task_name = task_name[:17] + "..."
+            if len(task_name) > 16:
+                task_name = task_name[:13] + "..."
             
-            # 绑定窗口数量和状态 - 紧凑显示
+            # 绑定窗口数量
             valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
             total_windows = len(task.bound_windows)
             
             if total_windows == 0:
                 windows_info = "无"
             elif valid_windows == total_windows:
-                windows_info = f"{total_windows}个"
+                windows_info = f"{total_windows}"
             else:
                 windows_info = f"{valid_windows}/{total_windows}"
             
-            # 最后访问时间 - 只显示时分
-            try:
-                last_time = datetime.fromisoformat(task.last_accessed)
-                time_str = last_time.strftime("%H:%M")
-            except:
-                time_str = "--:--"
+            # 任务状态 - 用图标表示
+            if i == current_index:
+                status = "●"  # 活跃
+            elif total_windows > 0 and valid_windows == total_windows:
+                status = "○"  # 就绪
+            elif valid_windows < total_windows:
+                status = "◐"  # 部分有效
+            else:
+                status = "◯"  # 空闲
             
-            # 新的4列格式：编号、任务名、窗口数、时间
-            table_data.append([task_num, task_name, windows_info, time_str])
+            # 新的4列格式：编号、任务名、窗口数、状态
+            table_data.append([task_num, task_name, windows_info, status])
         
         return table_data
     

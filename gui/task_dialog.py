@@ -12,6 +12,8 @@ from typing import List, Dict, Any, Optional, Tuple
 
 try:
     import FreeSimpleGUI as sg
+    # 设置现代化主题
+    sg.theme('DarkGrey13')
 except ImportError:
     print("错误: 请先安装FreeSimpleGUI")
     raise
@@ -65,8 +67,13 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(600, 550),  # 进一步增加窗口高度
-            location=(200, 150)  # 设置窗口位置
+            size=(620, 580),  # 适配现代化界面
+            location=(200, 150),
+            no_titlebar=False,  # 对话框保留标题栏
+            alpha_channel=0.98,  # 轻微透明
+            background_color="#202020",
+            margins=(12, 10),
+            element_padding=(4, 3)
         )
         
         # 初始化窗口列表数据
@@ -122,8 +129,13 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(600, 550),  # 进一步增加窗口高度
-            location=(200, 150)  # 设置窗口位置
+            size=(620, 580),  # 适配现代化界面
+            location=(200, 150),
+            no_titlebar=False,  # 对话框保留标题栏
+            alpha_channel=0.98,  # 轻微透明
+            background_color="#202020",
+            margins=(12, 10),
+            element_padding=(4, 3)
         )
         
         # 初始化窗口列表数据
@@ -172,12 +184,15 @@ class TaskDialog:
         # 窗口选择区域
         window_frame = self._create_window_selection_frame()
         
-        # 按钮区域
+        # 现代化按钮区域
         button_row = [
             sg.Push(),
             sg.Button("确定", key="-OK-", size=(10, 1), 
-                     button_color=("#FFFFFF", "#28A745")),
-            sg.Button("取消", key="-CANCEL-", size=(10, 1)),
+                     button_color=("#FFFFFF", "#107C10"), 
+                     font=("Segoe UI", 10), border_width=0),
+            sg.Button("取消", key="-CANCEL-", size=(10, 1),
+                     button_color=("#FFFFFF", "#404040"), 
+                     font=("Segoe UI", 10), border_width=0),
             sg.Push()
         ]
         
@@ -204,8 +219,10 @@ class TaskDialog:
         window_frame = [
             [sg.Text("选择要绑定到此任务的窗口:")],
             [sg.Text("操作: 1.点击选中窗口行  2.点击'添加选择'按钮将其加入任务", font=("Arial", 9), text_color="#666666")],
-            [sg.Button("刷新窗口列表", key="-REFRESH_WINDOWS-", size=(12, 1)),
-             sg.Button("添加选择", key="-ADD_WINDOW-", size=(10, 1), button_color=("#FFFFFF", "#28A745"))],
+            [sg.Button("刷新窗口列表", key="-REFRESH_WINDOWS-", size=(12, 1),
+                      button_color=("#FFFFFF", "#0078D4"), font=("Segoe UI", 9), border_width=0),
+             sg.Button("添加选择", key="-ADD_WINDOW-", size=(10, 1), 
+                      button_color=("#FFFFFF", "#107C10"), font=("Segoe UI", 9), border_width=0)],
             [sg.Table(
                 values=window_data,
                 headings=table_headings,
@@ -232,7 +249,8 @@ class TaskDialog:
                 enable_events=True,
                 expand_x=True
             )],
-            [sg.Button("移除选择", key="-REMOVE_WINDOW-", size=(10, 1))]
+            [sg.Button("移除选择", key="-REMOVE_WINDOW-", size=(10, 1),
+                      button_color=("#FFFFFF", "#D13438"), font=("Segoe UI", 9), border_width=0)]
         ]
         
         return window_frame
