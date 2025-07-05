@@ -56,6 +56,11 @@ class MainWindow:
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
         
+        # 拖拽状态跟踪
+        self.window_was_dragged = False
+        self.last_mouse_pos = None
+        self.mouse_press_time = None
+        
         # 设置现代化主题
         ModernUIConfig.setup_theme()
         
@@ -69,7 +74,7 @@ class MainWindow:
         colors = ModernUIConfig.COLORS
         fonts = ModernUIConfig.FONTS
         
-        # 状态行 - 添加关闭按钮
+        # 状态行 - 保持全局拖拽功能
         status_row = [
             sg.Text("", key="-STATUS-", font=fonts['body'], 
                    text_color=colors['text_secondary']),
@@ -213,18 +218,35 @@ class MainWindow:
         
         while self.running:
             try:
+                # 检查拖拽状态
+                self._check_drag_state()
+                
                 # 读取事件
-                event, values = self.window.read(timeout=1000)
+                event, values = self.window.read(timeout=50)  # 更短的超时以便及时检测拖拽
                 
                 # 处理事件
-                if event == sg.WIN_CLOSED or event == "-CLOSE-":
+                if event == sg.WIN_CLOSED:
                     break
+                elif event == "-CLOSE-":
+                    if not self.window_was_dragged:
+                        break
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-ADD_TASK-":
-                    self._handle_add_task()
+                    if not self.window_was_dragged:
+                        self._handle_add_task()
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-EDIT_TASK-":
-                    self._handle_edit_task(values)
+                    if not self.window_was_dragged:
+                        self._handle_edit_task(values)
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-DELETE_TASK-":
-                    self._handle_delete_task(values)
+                    if not self.window_was_dragged:
+                        self._handle_delete_task(values)
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-REFRESH-":
                     self._handle_refresh()
                 elif event == "-SETTINGS-":
@@ -310,6 +332,43 @@ class MainWindow:
             table_data.append([task_num, task_name, windows_info, status])
         
         return table_data
+    
+    def _check_drag_state(self):
+        """检查窗口是否被拖拽"""
+        try:
+            import win32api
+            import win32gui
+            import time
+            
+            # 获取当前鼠标位置
+            current_mouse_pos = win32api.GetCursorPos()
+            
+            # 检查鼠标左键状态
+            left_button_pressed = win32api.GetKeyState(0x01) < 0
+            
+            if left_button_pressed:
+                # 鼠标按下，记录起始位置和时间
+                if self.last_mouse_pos is None:
+                    self.last_mouse_pos = current_mouse_pos
+                    self.mouse_press_time = time.time()
+                    self.window_was_dragged = False
+                else:
+                    # 检查鼠标是否移动了
+                    dx = abs(current_mouse_pos[0] - self.last_mouse_pos[0])
+                    dy = abs(current_mouse_pos[1] - self.last_mouse_pos[1])
+                    
+                    # 如果移动距离超过阈值，认为是拖拽
+                    if dx > 3 or dy > 3:
+                        self.window_was_dragged = True
+            else:
+                # 鼠标释放，重置状态（但保留拖拽标记一小段时间）
+                if self.last_mouse_pos is not None:
+                    self.last_mouse_pos = None
+                    self.mouse_press_time = None
+                    # 不立即重置 window_was_dragged，让事件处理器有时间检查
+                    
+        except Exception as e:
+            print(f"检查拖拽状态失败: {e}")
     
     def _handle_add_task(self):
         """处理添加任务"""

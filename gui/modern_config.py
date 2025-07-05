@@ -48,7 +48,7 @@ class ModernUIConfig:
             'title': '',
             'no_titlebar': True,
             'keep_on_top': True,
-            'grab_anywhere': True,
+            'grab_anywhere': True,   # 重新启用全局拖拽
             'finalize': True,
             'resizable': False,
             'alpha_channel': 0.95,
