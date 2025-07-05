@@ -1,0 +1,17 @@
+# ContextSwitcher Dependencies
+# GUI Framework
+FreeSimpleGUI>=5.2.0
+
+# Windows API Integration
+pywin32>=306
+
+# Global Hotkey Support
+pynput>=1.7.6
+
+# Optional: System Tray Support
+# FreeSimpleGUIWx>=0.1.0
+
+# Development Dependencies (optional)
+# pytest>=7.0.0
+# black>=22.0.0
+# flake8>=4.0.0
