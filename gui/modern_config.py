@@ -25,12 +25,12 @@ class ModernUIConfig:
         'border': '#404040',            # 边框色
     }
     
-    # 字体配置
+    # 字体配置 - 可读性优化
     FONTS = {
         'title': ('Segoe UI', 12, 'bold'),
         'heading': ('Segoe UI', 10, 'bold'),
         'body': ('Segoe UI', 9),
-        'caption': ('Segoe UI', 8),
+        'caption': ('Segoe UI', 9),
         'button': ('Segoe UI', 9),
         'small': ('Segoe UI', 8)
     }
@@ -52,13 +52,13 @@ class ModernUIConfig:
             'finalize': True,
             'resizable': False,
             'alpha_channel': 0.95,
-            'margins': (8, 6),
-            'element_padding': (3, 2),
+            'margins': (4, 3),
+            'element_padding': (1, 1),
             'background_color': cls.COLORS['background'],
             'use_default_focus': False,
             'disable_minimize': True,
-            'auto_size_text': False,
-            'auto_size_buttons': False
+            'auto_size_text': True,   # 启用自动文本大小
+            'auto_size_buttons': True # 启用自动按钮大小
         }
         
         if size:
@@ -105,7 +105,7 @@ class ModernUIConfig:
             text,
             key=key,
             button_color=color,
-            font=cls.FONTS['button'],
+            font=cls.FONTS['button'] if size != (2, 1) else ('Segoe UI', 10),  # 正方形按钮使用稍大字体
             size=size,
             border_width=0,
             focus=False,
@@ -114,16 +114,17 @@ class ModernUIConfig:
     
     @classmethod
     def create_modern_table(cls, values: list, headings: list, key: str,
-                          num_rows: int = 4, col_widths: list = None) -> sg.Table:
+                          num_rows: int = 4, col_widths: list = None, 
+                          size: tuple = None) -> sg.Table:
         """创建现代化表格"""
-        return sg.Table(
+        table = sg.Table(
             values=values,
             headings=headings,
             key=key,
             enable_events=True,
             select_mode=sg.TABLE_SELECT_MODE_BROWSE,
             auto_size_columns=False,
-            col_widths=col_widths or [3, 20, 15, 8],
+            col_widths=col_widths or [2, 10, 3, 4],  # 平衡紧凑与可读性的列宽
             justification='left',
             alternating_row_color=cls.COLORS['surface'],
             selected_row_colors=(cls.COLORS['text'], cls.COLORS['primary']),
@@ -132,10 +133,16 @@ class ModernUIConfig:
             header_font=cls.FONTS['caption'] + ('bold',),
             font=cls.FONTS['caption'],
             num_rows=num_rows,
-            expand_x=True,
+            expand_x=False,  # 不自动扩展宽度，保持紧凑
             expand_y=False,
-            row_height=22,
+            row_height=18,  # 更紧凑的行高
             background_color=cls.COLORS['background'],
             text_color=cls.COLORS['text'],
-            border_width=0
+            border_width=0,
+            vertical_scroll_only=False,  # 禁用垂直滚动条
+            hide_vertical_scroll=True,   # 隐藏垂直滚动条
+            sbar_width=0,               # 设置滚动条宽度为0
+            sbar_arrow_width=0,         # 设置滚动条箭头宽度为0
+            sbar_background_color=cls.COLORS['background']  # 滚动条背景色
         )
+        return table

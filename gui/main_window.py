@@ -69,53 +69,64 @@ class MainWindow:
         colors = ModernUIConfig.COLORS
         fonts = ModernUIConfig.FONTS
         
-        # 去掉标题行，直接显示状态
+        # 状态行 - 添加关闭按钮
         status_row = [
             sg.Text("", key="-STATUS-", font=fonts['body'], 
                    text_color=colors['text_secondary']),
             sg.Push(),
             sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12), 
-                   text_color=colors['success'], tooltip="就绪")
+                   text_color=colors['success'], tooltip="就绪"),
+            sg.Button("✕", key="-CLOSE-", size=(1, 1), 
+                     button_color=(colors['text'], colors['error']),
+                     font=("Segoe UI", 10), border_width=0, tooltip="关闭")
         ]
         
-        # 现代化任务表格
+        # 现代化任务表格 - 清晰标题
         table_headings = ["#", "任务", "窗口", "状态"]
         table_data = []
         
-        table_row = [
-            ModernUIConfig.create_modern_table(
-                values=table_data,
-                headings=table_headings,
-                key="-TASK_TABLE-",
-                num_rows=4,
-                col_widths=[3, 20, 8, 6]
-            )
-        ]
+        # 创建精确控制宽度的表格
+        compact_table = ModernUIConfig.create_modern_table(
+            values=table_data,
+            headings=table_headings,
+            key="-TASK_TABLE-",
+            num_rows=4,
+            col_widths=[2, 10, 3, 4]  # 调整列宽使标题更清楚
+        )
+        # 确保表格不会扩展
+        compact_table.expand_x = False
+        compact_table.expand_y = False
         
-        # 现代化按钮行
+        table_row = [compact_table]
+        
+        # 正方形按钮行
         button_row = [
-            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (3, 1), "添加任务"),
-            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (3, 1), "编辑任务"),
-            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (3, 1), "删除任务"),
-            sg.Push(),
-            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (3, 1), "刷新")
+            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (2, 1), "添加任务"),
+            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1), "编辑任务"),
+            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1), "删除任务"),
+            sg.Text("", size=(1, 1)),  # 小分隔符
+            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (2, 1), "刷新")
         ]
         
         # 极简状态行
         bottom_row = [
             sg.Text("", key="-MAIN_STATUS-", font=fonts['small'], 
-                   text_color=colors['text_secondary']),
-            sg.Push(),
-            sg.Text("Ctrl+Alt+1-9", font=fonts['small'], 
-                   text_color=colors['text_disabled'])
+                   text_color=colors['text_secondary'], size=(8, 1)),
+            sg.Text("C+A+1-9", font=fonts['small'], 
+                   text_color=colors['text_disabled'], size=(6, 1))
         ]
         
-        # 现代化Widget布局 - 极简设计
+        # 现代化Widget布局 - 极简设计，使用Column控制整体宽度
         layout = [
-            status_row,
-            table_row,
-            button_row,
-            bottom_row
+            [sg.Column([
+                status_row,
+                table_row,
+                button_row,
+                bottom_row
+            ], element_justification='left', 
+               expand_x=False, expand_y=False,
+               pad=(0, 0),  # 无额外padding
+               background_color=colors['background'])]
         ]
         
         return layout
@@ -126,17 +137,13 @@ class MainWindow:
         window_config = ModernUIConfig.get_widget_window_config()
         window_config['layout'] = self.layout
         
-        # 窗口位置和大小
+        # 窗口位置设置，不设置大小让其自适应
         if self.window_config.get("remember_position", True):
-            window_config.update({
-                "location": (
-                    self.window_config.get("x", 200),
-                    self.window_config.get("y", 100)
-                )
-            })
-        else:
-            # 默认位置在屏幕右上角
-            window_config["location"] = (None, None)  # 让系统决定
+            window_config["location"] = (
+                self.window_config.get("x", 200),
+                self.window_config.get("y", 100)
+            )
+        # 不设置size参数，让窗口完全自适应内容大小
         
         # 创建窗口
         window = sg.Window(**window_config)
@@ -210,7 +217,7 @@ class MainWindow:
                 event, values = self.window.read(timeout=1000)
                 
                 # 处理事件
-                if event == sg.WIN_CLOSED:
+                if event == sg.WIN_CLOSED or event == "-CLOSE-":
                     break
                 elif event == "-ADD_TASK-":
                     self._handle_add_task()
@@ -273,31 +280,31 @@ class MainWindow:
             # 任务编号（带当前任务标记）
             task_num = f"►{i+1}" if i == current_index else str(i+1)
             
-            # 任务名称 - 限制长度
+            # 任务名称 - 适配调整后的列宽
             task_name = task.name
-            if len(task_name) > 16:
-                task_name = task_name[:13] + "..."
+            if len(task_name) > 8:
+                task_name = task_name[:6] + ".."
             
-            # 绑定窗口数量
+            # 绑定窗口数量 - 紧凑显示
             valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
             total_windows = len(task.bound_windows)
             
             if total_windows == 0:
-                windows_info = "无"
+                windows_info = "-"
             elif valid_windows == total_windows:
-                windows_info = f"{total_windows}"
+                windows_info = str(total_windows) if total_windows < 10 else "9+"
             else:
                 windows_info = f"{valid_windows}/{total_windows}"
             
-            # 任务状态 - 用图标表示
+            # 任务状态 - 用更清晰的图标表示
             if i == current_index:
-                status = "●"  # 活跃
+                status = "🟢"  # 活跃 - 绿色圆点
             elif total_windows > 0 and valid_windows == total_windows:
-                status = "○"  # 就绪
+                status = "🔵"  # 就绪 - 蓝色圆点
             elif valid_windows < total_windows:
-                status = "◐"  # 部分有效
+                status = "🟡"  # 部分有效 - 黄色圆点
             else:
-                status = "◯"  # 空闲
+                status = "⚪"  # 空闲 - 白色圆点
             
             # 新的4列格式：编号、任务名、窗口数、状态
             table_data.append([task_num, task_name, windows_info, status])
