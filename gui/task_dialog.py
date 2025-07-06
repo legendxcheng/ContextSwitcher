@@ -43,7 +43,7 @@ class TaskDialog:
         # 表单数据
         self.task_name = ""
         self.task_description = ""
-        self.task_status = TaskStatus.PENDING
+        self.task_status = TaskStatus.TODO
         self.selected_windows: List[WindowInfo] = []
     
     def show_add_dialog(self) -> bool:
@@ -55,7 +55,7 @@ class TaskDialog:
         # 重置表单数据
         self.task_name = ""
         self.task_description = ""
-        self.task_status = TaskStatus.PENDING
+        self.task_status = TaskStatus.TODO
         self.selected_windows = []
         
         # 创建对话框
@@ -176,7 +176,7 @@ class TaskDialog:
              sg.Multiline(self.task_description, key="-TASK_DESC-", 
                          size=(40, 3), enable_events=True)],
             [sg.Text("任务状态:", size=(10, 1)),
-             sg.Combo(["待处理", "活跃", "被阻塞", "已完成"], 
+             sg.Combo(["待办", "进行中", "已阻塞", "待审查", "已完成", "已暂停"], 
                      default_value=self._status_to_text(self.task_status),
                      key="-TASK_STATUS-", readonly=True, size=(15, 1))]
         ]
@@ -198,7 +198,6 @@ class TaskDialog:
         
         # 完整布局
         layout = [
-            [sg.Text(title, font=("Arial", 12, "bold"))],  # 更小的标题字体
             [sg.Frame("任务信息", info_frame, expand_x=True, 
                      element_justification="left")],
             [sg.Frame("绑定窗口", window_frame, expand_x=True, expand_y=False)],  # 不允许垂直扩展
@@ -232,12 +231,12 @@ class TaskDialog:
                 auto_size_columns=False,
                 col_widths=[6, 30, 15, 12],
                 justification="left",
-                alternating_row_color="#F8F9FA",
-                selected_row_colors="#FFFFFF on #007BFF",
-                header_background_color="#007BFF",
+                alternating_row_color="#404040",
+                selected_row_colors="#CCCCCC on #0078D4",
+                header_background_color="#2D2D2D",
                 header_text_color="#FFFFFF",
                 font=("Arial", 9),
-                num_rows=4,  # 进一步减少行数
+                num_rows=6,  # 适中的行数显示
                 expand_x=True,
                 expand_y=False  # 不允许垂直扩展
             )],
@@ -245,7 +244,7 @@ class TaskDialog:
             [sg.Listbox(
                 values=[f"{w.title} ({w.process_name})" for w in self.selected_windows],
                 key="-SELECTED_WINDOWS-",
-                size=(50, 2),  # 进一步减少高度
+                size=(50, 5),  # 增加高度以便更好显示
                 enable_events=True,
                 expand_x=True
             )],
@@ -499,19 +498,23 @@ class TaskDialog:
     def _status_to_text(self, status: TaskStatus) -> str:
         """状态枚举转换为文本"""
         status_map = {
-            TaskStatus.PENDING: "待处理",
-            TaskStatus.ACTIVE: "活跃", 
-            TaskStatus.BLOCKED: "被阻塞",
-            TaskStatus.COMPLETED: "已完成"
+            TaskStatus.TODO: "待办",
+            TaskStatus.IN_PROGRESS: "进行中",
+            TaskStatus.BLOCKED: "已阻塞",
+            TaskStatus.REVIEW: "待审查",
+            TaskStatus.COMPLETED: "已完成",
+            TaskStatus.PAUSED: "已暂停"
         }
-        return status_map.get(status, "待处理")
+        return status_map.get(status, "待办")
     
     def _text_to_status(self, text: str) -> TaskStatus:
         """文本转换为状态枚举"""
         text_map = {
-            "待处理": TaskStatus.PENDING,
-            "活跃": TaskStatus.ACTIVE,
-            "被阻塞": TaskStatus.BLOCKED,
-            "已完成": TaskStatus.COMPLETED
+            "待办": TaskStatus.TODO,
+            "进行中": TaskStatus.IN_PROGRESS,
+            "已阻塞": TaskStatus.BLOCKED,
+            "待审查": TaskStatus.REVIEW,
+            "已完成": TaskStatus.COMPLETED,
+            "已暂停": TaskStatus.PAUSED
         }
-        return text_map.get(text, TaskStatus.PENDING)
+        return text_map.get(text, TaskStatus.TODO)

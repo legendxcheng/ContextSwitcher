@@ -58,6 +58,8 @@ class ContextSwitcher:
         self.hotkey_manager = None
         self.main_window = None
         self.data_storage = None
+        self.smart_rebind_manager = None
+        self.task_status_manager = None
         
         # 运行状态
         self.running = False
@@ -69,6 +71,8 @@ class ContextSwitcher:
         try:
             from core.task_manager import TaskManager
             from core.hotkey_manager import HotkeyManager
+            from core.smart_rebind_manager import SmartRebindManager
+            from core.task_status_manager import TaskStatusManager
             from gui.main_window import MainWindow
             from utils.data_storage import DataStorage
             
@@ -86,8 +90,20 @@ class ContextSwitcher:
             self.hotkey_manager = HotkeyManager(self.task_manager)
             print("  ✓ 热键管理器")
             
+            # 初始化智能重新绑定管理器
+            self.smart_rebind_manager = SmartRebindManager(
+                self.task_manager, self.task_manager.window_manager
+            )
+            print("  ✓ 智能重新绑定管理器")
+            
+            # 初始化任务状态管理器
+            self.task_status_manager = TaskStatusManager(self.task_manager)
+            print("  ✓ 任务状态管理器")
+            
             # 初始化主窗口
             self.main_window = MainWindow(self.task_manager)
+            self.main_window.smart_rebind_manager = self.smart_rebind_manager
+            self.main_window.task_status_manager = self.task_status_manager
             self.main_window.on_window_closed = self.cleanup
             print("  ✓ 主窗口")
             

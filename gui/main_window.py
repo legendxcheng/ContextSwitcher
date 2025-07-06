@@ -37,6 +37,8 @@ class MainWindow:
         """
         self.task_manager = task_manager
         self.config = get_config()
+        self.smart_rebind_manager = None  # 将在主程序中设置
+        self.task_status_manager = None  # 将在主程序中设置
         
         # 窗口配置
         self.window_config = self.config.get_window_config()
@@ -110,6 +112,8 @@ class MainWindow:
             ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1), "编辑任务"),
             ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1), "删除任务"),
             sg.Text("", size=(1, 1)),  # 小分隔符
+            ModernUIConfig.create_modern_button("🔄", "-CHANGE_STATUS-", "warning", (2, 1), "变更状态"),
+            ModernUIConfig.create_modern_button("🔧", "-SMART_REBIND-", "warning", (2, 1), "智能重新绑定"),
             ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (2, 1), "刷新")
         ]
         
@@ -249,6 +253,16 @@ class MainWindow:
                         self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-REFRESH-":
                     self._handle_refresh()
+                elif event == "-CHANGE_STATUS-":
+                    if not self.window_was_dragged:
+                        self._handle_change_status(values)
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
+                elif event == "-SMART_REBIND-":
+                    if not self.window_was_dragged:
+                        self._handle_smart_rebind(values)
+                    else:
+                        self.window_was_dragged = False  # 重置拖拽状态
                 elif event == "-SETTINGS-":
                     self._handle_settings()
                 elif event == "-TASK_TABLE-":
@@ -318,15 +332,20 @@ class MainWindow:
             else:
                 windows_info = f"{valid_windows}/{total_windows}"
             
-            # 任务状态 - 用更清晰的图标表示
-            if i == current_index:
-                status = "🟢"  # 活跃 - 绿色圆点
-            elif total_windows > 0 and valid_windows == total_windows:
-                status = "🔵"  # 就绪 - 蓝色圆点
-            elif valid_windows < total_windows:
-                status = "🟡"  # 部分有效 - 黄色圆点
+            # 任务状态 - 使用状态管理器的图标
+            if self.task_status_manager:
+                status_icon = self.task_status_manager.get_status_icon(task.status)
+                status = status_icon
             else:
-                status = "⚪"  # 空闲 - 白色圆点
+                # 备用显示方案
+                if i == current_index:
+                    status = "🟢"  # 活跃 - 绿色圆点
+                elif total_windows > 0 and valid_windows == total_windows:
+                    status = "🔵"  # 就绪 - 蓝色圆点
+                elif valid_windows < total_windows:
+                    status = "🟡"  # 部分有效 - 黄色圆点
+                else:
+                    status = "⚪"  # 空闲 - 白色圆点
             
             # 新的4列格式：编号、任务名、窗口数、状态
             table_data.append([task_num, task_name, windows_info, status])
@@ -468,6 +487,89 @@ class MainWindow:
         except Exception as e:
             print(f"刷新失败: {e}")
             self._set_status("刷新失败", 3000)
+    
+    def _handle_smart_rebind(self, values: Dict[str, Any]):
+        """处理智能重新绑定"""
+        try:
+            if not self.smart_rebind_manager:
+                sg.popup("智能重新绑定功能不可用", title="错误")
+                return
+            
+            selected_rows = values.get("-TASK_TABLE-", [])
+            if not selected_rows:
+                sg.popup("请先选择要检查的任务", title="提示")
+                return
+            
+            task_index = selected_rows[0]
+            task = self.task_manager.get_task_by_index(task_index)
+            
+            if not task:
+                sg.popup("任务不存在", title="错误")
+                return
+            
+            # 检查任务的窗口绑定
+            validation_result = self.smart_rebind_manager.validate_and_suggest_rebinds(task)
+            
+            if validation_result['valid']:
+                sg.popup(f"任务 '{task.name}' 的所有窗口绑定都是有效的。", title="检查结果")
+                return
+            
+            # 显示重新绑定对话框
+            from gui.rebind_dialog import RebindDialog
+            
+            dialog = RebindDialog(self.window, self.smart_rebind_manager)
+            rebind_made = dialog.show_rebind_dialog(task)
+            
+            if rebind_made:
+                self._update_display()
+                self._set_status("重新绑定完成", 3000)
+            
+        except Exception as e:
+            print(f"智能重新绑定失败: {e}")
+            import traceback
+            traceback.print_exc()
+            self._set_status("智能重新绑定失败", 3000)
+    
+    def _handle_change_status(self, values: Dict[str, Any]):
+        """处理状态变更"""
+        try:
+            if not self.task_status_manager:
+                sg.popup("状态管理功能不可用", title="错误")
+                return
+            
+            selected_rows = values.get("-TASK_TABLE-", [])
+            if not selected_rows:
+                sg.popup("请先选择要变更状态的任务", title="提示")
+                return
+            
+            task_index = selected_rows[0]
+            task = self.task_manager.get_task_by_index(task_index)
+            
+            if not task:
+                sg.popup("任务不存在", title="错误")
+                return
+            
+            # 显示状态变更对话框
+            from gui.status_selector import StatusSelector
+            
+            selector = StatusSelector(self.task_status_manager)
+            selector.on_status_changed = self._on_status_changed
+            status_changed = selector.show_status_change_dialog(task)
+            
+            if status_changed:
+                self._update_display()
+                self._set_status("状态变更完成", 3000)
+            
+        except Exception as e:
+            print(f"状态变更失败: {e}")
+            import traceback
+            traceback.print_exc()
+            self._set_status("状态变更失败", 3000)
+    
+    def _on_status_changed(self, task_id: str, new_status):
+        """状态变更回调"""
+        if self.running:
+            self._update_display()
     
     def _handle_settings(self):
         """处理设置"""

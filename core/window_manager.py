@@ -399,6 +399,27 @@ class WindowManager:
                                        key=lambda x: x[1], reverse=True)[:5])
         }
     
+    def get_window_process(self, hwnd: int) -> str:
+        """获取窗口的进程名
+        
+        Args:
+            hwnd: 窗口句柄
+            
+        Returns:
+            进程名，如果获取失败则返回"Unknown"
+        """
+        try:
+            thread_id, process_id = win32process.GetWindowThreadProcessId(hwnd)
+            process_handle = win32api.OpenProcess(
+                win32con.PROCESS_QUERY_INFORMATION | win32con.PROCESS_VM_READ,
+                False, process_id
+            )
+            process_name = win32process.GetModuleFileNameEx(process_handle, 0)
+            win32api.CloseHandle(process_handle)
+            return process_name.split('\\')[-1] if process_name else "Unknown"
+        except Exception:
+            return "Unknown"
+    
     def invalidate_cache(self):
         """清除窗口缓存，强制下次重新枚举"""
         self.cached_windows = []

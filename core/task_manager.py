@@ -20,10 +20,12 @@ from core.window_manager import WindowManager, WindowInfo
 
 class TaskStatus(Enum):
     """任务状态枚举"""
-    ACTIVE = "active"       # 活跃
-    PENDING = "pending"     # 待处理
-    BLOCKED = "blocked"     # 被阻塞
+    TODO = "todo"           # 待办
+    IN_PROGRESS = "in_progress"  # 进行中
+    BLOCKED = "blocked"     # 已阻塞
+    REVIEW = "review"       # 待审查
     COMPLETED = "completed" # 已完成
+    PAUSED = "paused"       # 已暂停
 
 
 @dataclass
@@ -42,7 +44,7 @@ class Task:
     id: str                           # 任务唯一ID
     name: str                         # 任务名称
     description: str = ""             # 任务描述
-    status: TaskStatus = TaskStatus.PENDING  # 任务状态
+    status: TaskStatus = TaskStatus.TODO  # 任务状态
     bound_windows: List[BoundWindow] = field(default_factory=list)  # 绑定的窗口
     created_at: str = field(default_factory=lambda: datetime.now().isoformat())  # 创建时间
     last_accessed: str = ""           # 最后访问时间
@@ -68,7 +70,7 @@ class Task:
             try:
                 data['status'] = TaskStatus(data['status'])
             except ValueError:
-                data['status'] = TaskStatus.PENDING
+                data['status'] = TaskStatus.TODO
         
         # 处理绑定窗口
         if 'bound_windows' in data:
@@ -428,3 +430,33 @@ class TaskManager:
                 print(f"  ✗ 窗口已失效: {window.title}")
         
         return valid_windows
+    
+    def replace_window(self, task_id: str, old_hwnd: int, new_bound_window: BoundWindow) -> bool:
+        """替换任务中的窗口绑定
+        
+        Args:
+            task_id: 任务ID
+            old_hwnd: 要替换的旧窗口句柄
+            new_bound_window: 新的绑定窗口
+            
+        Returns:
+            是否成功替换
+        """
+        task = self.get_task_by_id(task_id)
+        if not task:
+            return False
+        
+        # 查找要替换的窗口
+        for i, window in enumerate(task.bound_windows):
+            if window.hwnd == old_hwnd:
+                # 替换窗口
+                task.bound_windows[i] = new_bound_window
+                print(f"✓ 已替换窗口: {window.title} -> {new_bound_window.title}")
+                
+                # 触发更新回调
+                if self.on_task_updated:
+                    self.on_task_updated(task)
+                
+                return True
+        
+        return False
