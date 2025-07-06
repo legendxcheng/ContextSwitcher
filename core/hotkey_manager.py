@@ -193,8 +193,8 @@ class HotkeyManager:
         if current_time - self.last_hotkey_time < self.hotkey_debounce:
             return
         
-        # 调试信息：显示当前按下的键
-        if len(self.pressed_keys) > 0:
+        # 调试信息：只在有修饰键时显示
+        if len(self.pressed_keys) >= 3:  # Ctrl + Alt + 数字键
             key_names = [str(key) for key in self.pressed_keys]
             print(f"🔍 当前按下的键: {', '.join(key_names)}")
         
@@ -222,11 +222,36 @@ class HotkeyManager:
         if not (ctrl_pressed and alt_pressed):
             return False
         
-        # 检查目标键
-        if required_key not in self.pressed_keys:
-            return False
+        # 检查目标键 - 数字键匹配
+        target_key_found = False
         
-        return True
+        # 获取期望的字符
+        if hasattr(required_key, 'char') and required_key.char:
+            target_char = required_key.char
+            target_ascii = ord(target_char)
+            
+            # 检查当前按下的键中是否有匹配的数字键
+            for pressed_key in self.pressed_keys:
+                # 方法1: 直接字符匹配
+                if hasattr(pressed_key, 'char') and pressed_key.char == target_char:
+                    target_key_found = True
+                    break
+                # 方法2: ASCII码匹配 (处理 <49>, <50> 等情况)
+                elif hasattr(pressed_key, 'vk') and pressed_key.vk == target_ascii:
+                    target_key_found = True
+                    break
+                # 方法3: 字符串表示匹配 (处理 KeyCode 对象)
+                elif str(pressed_key) == str(required_key):
+                    target_key_found = True
+                    break
+            
+            # 调试信息
+            if not target_key_found:
+                print(f"❌ 目标键 '{target_char}' (ASCII:{target_ascii}) 未找到")
+            else:
+                print(f"✅ 目标键 '{target_char}' 找到")
+        
+        return target_key_found
     
     def _handle_hotkey(self, hotkey_name: str, hotkey_info: Dict[str, Any]):
         """处理热键触发"""
