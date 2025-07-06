@@ -193,10 +193,17 @@ class HotkeyManager:
         if current_time - self.last_hotkey_time < self.hotkey_debounce:
             return
         
+        # 调试信息：显示当前按下的键
+        if len(self.pressed_keys) > 0:
+            key_names = [str(key) for key in self.pressed_keys]
+            print(f"🔍 当前按下的键: {', '.join(key_names)}")
+        
         for hotkey_name, hotkey_info in self.hotkey_combinations.items():
             if self._is_hotkey_pressed(hotkey_info):
                 # 记录热键触发时间
                 self.last_hotkey_time = current_time
+                
+                print(f"🎯 热键匹配: {hotkey_name}")
                 
                 # 处理热键
                 self._handle_hotkey(hotkey_name, hotkey_info)
@@ -207,27 +214,17 @@ class HotkeyManager:
         required_modifiers = hotkey_info["modifiers"]
         required_key = hotkey_info["key"]
         
-        # 检查修饰键
-        modifier_pressed = False
-        for modifier in required_modifiers:
-            if modifier in self.pressed_keys:
-                modifier_pressed = True
-                break
+        # 检查是否至少有一个Ctrl和一个Alt键被按下
+        ctrl_pressed = Key.ctrl_l in self.pressed_keys or Key.ctrl_r in self.pressed_keys
+        alt_pressed = Key.alt_l in self.pressed_keys or Key.alt_r in self.pressed_keys
         
-        if not modifier_pressed:
+        # Ctrl+Alt组合需要两个修饰键都被按下
+        if not (ctrl_pressed and alt_pressed):
             return False
         
         # 检查目标键
         if required_key not in self.pressed_keys:
             return False
-        
-        # 确保没有按下额外的修饰键
-        extra_modifiers = {Key.ctrl_l, Key.ctrl_r, Key.alt_l, Key.alt_r, 
-                          Key.shift_l, Key.shift_r, Key.cmd} - required_modifiers
-        
-        for extra_mod in extra_modifiers:
-            if extra_mod in self.pressed_keys:
-                return False
         
         return True
     
