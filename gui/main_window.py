@@ -291,6 +291,10 @@ class MainWindow:
             table_data = self._get_table_data()
             row_colors = self._get_row_colors()
             
+            # 调试信息
+            if row_colors:
+                print(f"🎨 设置行颜色: {row_colors}")
+            
             # 更新表格数据和行颜色
             self.window["-TASK_TABLE-"].update(values=table_data, row_colors=row_colors)
             
@@ -356,18 +360,16 @@ class MainWindow:
         return table_data
     
     def _get_row_colors(self) -> List[tuple]:
-        """获取表格行颜色配置"""
+        """获取表格行颜色配置 - 使用FreeSimpleGUI正确的row_colors格式"""
         row_colors = []
         tasks = self.task_manager.get_all_tasks()
         current_index = self.task_manager.current_task_index
         
+        # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
         for i, task in enumerate(tasks):
             if i == current_index:
-                # 当前任务：绿色文字，深色背景
-                row_colors.append(('#00DD00', '#2D2D2D'))  # 亮绿色文字，深灰背景
-            else:
-                # 普通任务：默认颜色
-                row_colors.append(None)  # 使用默认颜色
+                # 当前任务：添加绿色高亮
+                row_colors.append((i, '#00DD00', '#2D2D2D'))  # 行号, 亮绿色文字, 深灰背景
         
         return row_colors
     
