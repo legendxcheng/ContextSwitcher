@@ -366,10 +366,14 @@ class MainWindow:
         current_index = self.task_manager.current_task_index
         
         # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
+        # 必须为所有行明确设置颜色，否则之前的颜色不会被清除
         for i, task in enumerate(tasks):
             if i == current_index:
-                # 当前任务：添加绿色高亮
-                row_colors.append((i, '#00DD00', '#2D2D2D'))  # 行号, 亮绿色文字, 深灰背景
+                # 当前任务：绿色高亮
+                row_colors.append((i, '#00DD00', '#2D2D2D'))  # 亮绿色文字, 深灰背景
+            else:
+                # 非当前任务：恢复默认白色
+                row_colors.append((i, '#FFFFFF', '#202020'))  # 白色文字, 默认背景
         
         return row_colors
     
