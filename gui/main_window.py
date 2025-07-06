@@ -287,9 +287,12 @@ class MainWindow:
             return
         
         try:
-            # 更新任务表格
+            # 更新任务表格和行颜色
             table_data = self._get_table_data()
-            self.window["-TASK_TABLE-"].update(values=table_data)
+            row_colors = self._get_row_colors()
+            
+            # 更新表格数据和行颜色
+            self.window["-TASK_TABLE-"].update(values=table_data, row_colors=row_colors)
             
             # 更新状态
             task_count = len(self.task_manager.get_all_tasks())
@@ -351,6 +354,22 @@ class MainWindow:
             table_data.append([task_num, task_name, windows_info, status])
         
         return table_data
+    
+    def _get_row_colors(self) -> List[tuple]:
+        """获取表格行颜色配置"""
+        row_colors = []
+        tasks = self.task_manager.get_all_tasks()
+        current_index = self.task_manager.current_task_index
+        
+        for i, task in enumerate(tasks):
+            if i == current_index:
+                # 当前任务：绿色文字，深色背景
+                row_colors.append(('#00DD00', '#2D2D2D'))  # 亮绿色文字，深灰背景
+            else:
+                # 普通任务：默认颜色
+                row_colors.append(None)  # 使用默认颜色
+        
+        return row_colors
     
     def _check_drag_state(self):
         """检查窗口是否被拖拽"""
