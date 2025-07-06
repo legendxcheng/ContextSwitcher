@@ -4,6 +4,7 @@
 """
 
 import FreeSimpleGUI as sg
+import os
 from typing import Dict, Any, Tuple
 
 
@@ -44,8 +45,11 @@ class ModernUIConfig:
     def get_widget_window_config(cls, size: Tuple[int, int] = None, 
                                 location: Tuple[int, int] = None) -> Dict[str, Any]:
         """获取Widget风格窗口配置"""
+        # 获取图标路径
+        icon_path = cls._get_icon_path()
+        
         config = {
-            'title': '',
+            'title': 'ContextSwitcher',  # 设置标题以确保任务栏图标显示
             'no_titlebar': True,
             'keep_on_top': True,
             'grab_anywhere': True,   # 重新启用全局拖拽
@@ -58,7 +62,8 @@ class ModernUIConfig:
             'use_default_focus': False,
             'disable_minimize': True,
             'auto_size_text': True,   # 启用自动文本大小
-            'auto_size_buttons': True # 启用自动按钮大小
+            'auto_size_buttons': True, # 启用自动按钮大小
+            'icon': icon_path if icon_path else None
         }
         
         if size:
@@ -69,9 +74,45 @@ class ModernUIConfig:
         return config
     
     @classmethod
+    def _get_icon_path(cls) -> str:
+        """获取应用图标路径"""
+        try:
+            # 获取项目根目录
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            project_root = os.path.dirname(current_dir)  # 上一级目录
+            
+            # 优先使用ICO格式，其次使用PNG格式
+            icon_paths = [
+                os.path.join(project_root, 'icon.ico'),
+                os.path.join(project_root, 'icon.png')
+            ]
+            
+            # 简化路径检查，直接返回找到的第一个
+            for icon_path in icon_paths:
+                if os.path.exists(icon_path):
+                    # 验证文件大小
+                    file_size = os.path.getsize(icon_path)
+                    if file_size > 0:
+                        print(f"✅ 使用图标: {icon_path} (大小: {file_size} bytes)")
+                        # 返回绝对路径以确保FreeSimpleGUI能正确找到文件
+                        return os.path.abspath(icon_path)
+                    else:
+                        print(f"⚠️ 图标文件为空: {icon_path}")
+            
+            print("❌ 未找到有效的图标文件")
+            return None
+            
+        except Exception as e:
+            print(f"❌ 获取图标路径失败: {e}")
+            return None
+    
+    @classmethod
     def get_dialog_window_config(cls, title: str, size: Tuple[int, int]) -> Dict[str, Any]:
         """获取对话框窗口配置"""
-        return {
+        # 获取图标路径
+        icon_path = cls._get_icon_path()
+        
+        config = {
             'title': title,
             'modal': True,
             'keep_on_top': True,
@@ -84,6 +125,11 @@ class ModernUIConfig:
             'margins': (12, 10),
             'element_padding': (4, 3)
         }
+        
+        if icon_path:
+            config['icon'] = icon_path
+            
+        return config
     
     @classmethod
     def create_modern_button(cls, text: str, key: str, 

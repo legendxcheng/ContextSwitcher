@@ -21,6 +21,7 @@ except ImportError:
 from core.task_manager import TaskManager, Task, TaskStatus
 from core.window_manager import WindowInfo
 from gui.window_selector import WindowSelector
+from gui.modern_config import ModernUIConfig
 
 
 class TaskDialog:
@@ -60,6 +61,9 @@ class TaskDialog:
         
         # 创建对话框
         layout = self._create_add_layout()
+        # 获取图标路径
+        icon_path = ModernUIConfig._get_icon_path()
+        
         self.dialog_window = sg.Window(
             "添加任务",
             layout,
@@ -73,11 +77,15 @@ class TaskDialog:
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
             margins=(12, 10),
-            element_padding=(4, 3)
+            element_padding=(4, 3),
+            icon=icon_path if icon_path else None
         )
         
         # 初始化窗口列表数据
         self._refresh_window_list()
+        
+        # 绑定双击事件（在窗口finalize后）
+        self.dialog_window['-WINDOW_TABLE-'].bind('<Double-Button-1>', ' Double')
         
         # 运行对话框
         result = self._run_dialog()
@@ -122,6 +130,9 @@ class TaskDialog:
         
         # 创建对话框
         layout = self._create_edit_layout()
+        # 获取图标路径
+        icon_path = ModernUIConfig._get_icon_path()
+        
         self.dialog_window = sg.Window(
             f"编辑任务 - {task.name}",
             layout,
@@ -135,11 +146,15 @@ class TaskDialog:
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
             margins=(12, 10),
-            element_padding=(4, 3)
+            element_padding=(4, 3),
+            icon=icon_path if icon_path else None
         )
         
         # 初始化窗口列表数据
         self._refresh_window_list()
+        
+        # 绑定双击事件（在窗口finalize后）
+        self.dialog_window['-WINDOW_TABLE-'].bind('<Double-Button-1>', ' Double')
         
         # 运行对话框
         result = self._run_dialog()
@@ -217,7 +232,7 @@ class TaskDialog:
         
         window_frame = [
             [sg.Text("选择要绑定到此任务的窗口:")],
-            [sg.Text("操作: 1.点击选中窗口行  2.点击'添加选择'按钮将其加入任务", font=("Arial", 9), text_color="#666666")],
+            [sg.Text("操作: 1.双击窗口行直接添加  2.或点击选中后点击'添加选择'按钮", font=("Arial", 9), text_color="#666666")],
             [sg.Button("刷新窗口列表", key="-REFRESH_WINDOWS-", size=(12, 1),
                       button_color=("#FFFFFF", "#0078D4"), font=("Segoe UI", 9), border_width=0),
              sg.Button("添加选择", key="-ADD_WINDOW-", size=(10, 1), 
@@ -281,6 +296,10 @@ class TaskDialog:
                 elif event == "-WINDOW_TABLE-":
                     # 只响应表格选择，不自动添加/移除窗口
                     self._handle_table_click(values)
+                
+                elif event == "-WINDOW_TABLE- Double":
+                    # 处理双击事件：直接添加窗口
+                    self._handle_table_double_click(values)
                 
                 elif event == "-ADD_WINDOW-":
                     # 新增的添加按钮
@@ -364,18 +383,19 @@ class TaskDialog:
             sg.popup(f"刷新失败: {e}", title="错误")
     
     def _handle_table_click(self, values: Dict[str, Any]):
-        """处理表格点击事件（仅选择，不添加/移除）"""
+        """处理表格单击事件"""
         try:
             selected_rows = values.get("-WINDOW_TABLE-", [])
             if not selected_rows:
+                print("⚠️ 表格点击：没有选中行")
                 return
             
             row_index = selected_rows[0]
+            print(f"📌 单击事件：行索引: {row_index}")
+            
             # 使用Values属性获取完整的表格数据
             table_widget = self.dialog_window["-WINDOW_TABLE-"]
             table_data = table_widget.Values
-            
-            print(f"调试信息 - row_index: {row_index}, table_data类型: {type(table_data)}, len(table_data): {len(table_data) if table_data else 0}")
             
             if not table_data or row_index >= len(table_data):
                 print(f"表格数据异常: row_index={row_index}, len(table_data)={len(table_data) if table_data else 0}")
@@ -390,6 +410,25 @@ class TaskDialog:
             
         except Exception as e:
             print(f"处理表格点击失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
+    def _handle_table_double_click(self, values: Dict[str, Any]):
+        """处理表格双击事件，直接添加窗口"""
+        try:
+            selected_rows = values.get("-WINDOW_TABLE-", [])
+            if not selected_rows:
+                print("⚠️ 表格双击：没有选中行")
+                return
+            
+            row_index = selected_rows[0]
+            print(f"✅ 检测到双击事件！行索引: {row_index}, 开始添加窗口")
+            
+            # 直接添加窗口
+            self._add_window_by_row_index(row_index)
+            
+        except Exception as e:
+            print(f"处理表格双击失败: {e}")
             import traceback
             traceback.print_exc()
     
@@ -441,14 +480,66 @@ class TaskDialog:
                 self._update_selected_windows_display()
                 self._refresh_window_list()
                 print(f"已添加窗口: {window_info.title}")
-                # 显示成功提示
-                sg.popup_timed(f"已添加窗口: {window_info.title}", auto_close_duration=2, title="成功")
+                # 不再显示弹窗提示，保持界面简洁
             else:
                 sg.popup("窗口信息获取失败", title="错误")
                 
         except Exception as e:
             print(f"添加窗口失败: {e}")
             sg.popup(f"添加失败: {e}", title="错误")
+    
+    def _add_window_by_row_index(self, row_index: int):
+        """通过行索引直接添加窗口（双击触发，无弹窗提示）"""
+        try:
+            print(f"🔄 开始双击添加窗口，行索引: {row_index}")
+            
+            # 使用Values属性获取完整的表格数据
+            table_widget = self.dialog_window["-WINDOW_TABLE-"]
+            table_data = table_widget.Values
+            
+            print(f"📊 表格数据检查: table_data存在={table_data is not None}, 长度={len(table_data) if table_data else 0}")
+            
+            if not table_data or row_index >= len(table_data):
+                print(f"❌ 表格数据异常: row_index={row_index}, len(table_data)={len(table_data) if table_data else 0}")
+                return
+            
+            # 检查行数据格式
+            row_data = table_data[row_index]
+            print(f"📋 行数据: {row_data}")
+            
+            if not isinstance(row_data, list) or len(row_data) < 4:
+                print(f"❌ 表格行数据格式异常: {row_data}")
+                return
+            
+            # 获取窗口句柄
+            hwnd_str = row_data[3]
+            print(f"🎯 窗口句柄字符串: {hwnd_str}")
+            hwnd = int(hwnd_str)
+            print(f"🎯 窗口句柄: {hwnd}")
+            
+            # 检查是否已经选择
+            selected_hwnds = [w.hwnd for w in self.selected_windows]
+            if hwnd in selected_hwnds:
+                print(f"⚠️ 窗口已经选择: {hwnd}")
+                return
+            
+            # 获取窗口信息并添加
+            print(f"🔍 获取窗口信息: {hwnd}")
+            window_info = self.task_manager.window_manager.get_window_info(hwnd)
+            if window_info:
+                print(f"✅ 窗口信息获取成功: {window_info.title}")
+                self.selected_windows.append(window_info)
+                self._update_selected_windows_display()
+                self._refresh_window_list()
+                print(f"🎉 双击添加窗口成功: {window_info.title}")
+                # 不显示弹窗提示，只在控制台输出
+            else:
+                print("❌ 窗口信息获取失败")
+                
+        except Exception as e:
+            print(f"❌ 双击添加窗口失败: {e}")
+            import traceback
+            traceback.print_exc()
     
     def _handle_remove_window(self, values: Dict[str, Any]):
         """处理移除窗口"""
