@@ -10,6 +10,7 @@
 """
 
 import time
+import uuid
 from datetime import datetime
 from typing import List, Dict, Optional, Tuple, Any
 from dataclasses import dataclass, field, asdict
@@ -243,7 +244,7 @@ class TaskManager:
         return True
     
     def switch_to_task(self, index: int) -> bool:
-        """切换到指定任务
+        """切换到指定任务（支持中止机制）
         
         Args:
             index: 任务索引 (0-8 对应热键 1-9)
@@ -256,7 +257,16 @@ class TaskManager:
             return False
         
         task = self.tasks[index]
-        print(f"正在切换到任务: {task.name}")
+        
+        # 生成独特的切换ID
+        switch_id = str(uuid.uuid4())[:8]
+        
+        print(f"正在切换到任务: {task.name} (ID: {switch_id})")
+        
+        # 中止当前正在进行的切换
+        aborted_previous = self.window_manager.abort_current_switch(switch_id)
+        if aborted_previous:
+            print(f"⚠️ 已中止上一个切换操作")
         
         # 更新访问信息
         task.last_accessed = datetime.now().isoformat()
@@ -270,12 +280,12 @@ class TaskManager:
             print(f"警告: 任务 '{task.name}' 没有有效的绑定窗口")
             return False
         
-        # 激活所有有效窗口
+        # 激活所有有效窗口（带上切换ID）
         hwnds = [w.hwnd for w in valid_windows]
-        results = self.window_manager.activate_multiple_windows(hwnds)
+        results = self.window_manager.activate_multiple_windows(hwnds, switch_id=switch_id)
         
         success_count = sum(1 for success in results.values() if success)
-        print(f"任务切换完成: {success_count}/{len(hwnds)} 个窗口成功激活")
+        print(f"任务切换完成: {success_count}/{len(hwnds)} 个窗口成功激活 (ID: {switch_id})")
         
         # 触发事件回调
         if self.on_task_switched:

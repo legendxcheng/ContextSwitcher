@@ -10,6 +10,7 @@ Windows API窗口管理模块
 """
 
 import time
+import threading
 from typing import List, Tuple, Optional, Dict, Any
 from dataclasses import dataclass
 
@@ -45,6 +46,11 @@ class WindowManager:
         self.last_enum_time = 0
         self.cached_windows = []
         self.cache_duration = 2.0  # 缓存2秒
+        
+        # 切换中止机制
+        self._abort_switch = False
+        self._switch_lock = threading.Lock()
+        self._current_switch_id = None
         
         # 需要过滤的窗口类名（系统窗口等）
         self.filtered_classes = {
@@ -228,7 +234,7 @@ class WindowManager:
             return False
     
     def activate_window(self, hwnd: int) -> bool:
-        """激活指定窗口到前台
+        """使用多阶段策略激活指定窗口到前台
         
         Args:
             hwnd: 窗口句柄
@@ -246,55 +252,175 @@ class WindowManager:
                 return False
             
             # 如果窗口已经是前台窗口，直接返回成功
-            if win32gui.GetForegroundWindow() == hwnd:
+            current_fg = win32gui.GetForegroundWindow()
+            if current_fg == hwnd:
                 return True
             
-            # 尝试激活窗口
-            try:
-                # 如果窗口最小化，先恢复
-                if win32gui.IsIconic(hwnd):
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    time.sleep(0.1)  # 等待窗口恢复
-                
-                # 激活窗口
-                win32gui.SetForegroundWindow(hwnd)
-                
-                # 确保窗口在最前面
-                win32gui.SetWindowPos(
-                    hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
-                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
-                )
-                
-                # 短暂等待，确保激活生效
-                time.sleep(0.05)
-                
-                # 验证是否成功
-                return win32gui.GetForegroundWindow() == hwnd
-                
-            except Exception as e:
-                print(f"激活窗口失败 (第一次尝试): {e}")
-                
-                # 备用方法：使用ShowWindow
-                try:
-                    win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
-                    win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
-                    win32gui.SetForegroundWindow(hwnd)
-                    time.sleep(0.05)
-                    return True
-                except Exception as e2:
-                    print(f"激活窗口失败 (备用方法): {e2}")
-                    return False
+            return self._activate_window_robust(hwnd)
         
         except Exception as e:
             print(f"激活窗口时出错: {e}")
             return False
     
-    def activate_multiple_windows(self, hwnds: List[int], delay: float = 0.1) -> Dict[int, bool]:
-        """批量激活多个窗口
+    def _activate_window_robust(self, hwnd: int, max_retries: int = 3) -> bool:
+        """强化的窗口激活方法，使用多种策略"""
+        
+        for attempt in range(max_retries):
+            print(f"尝试激活窗口 (第{attempt + 1}次): {hwnd}")
+            
+            # 策略1: ALT键技巧 + SetForegroundWindow
+            if self._try_alt_key_activation(hwnd):
+                print(f"✅ ALT键激活成功")
+                return True
+            
+            # 策略2: 传统方法
+            if self._try_traditional_activation(hwnd):
+                print(f"✅ 传统激活成功")
+                return True
+            
+            # 策略3: 线程输入附加方法
+            if self._try_thread_attach_activation(hwnd):
+                print(f"✅ 线程附加激活成功")
+                return True
+            
+            # 策略4: 窗口位置激活
+            if self._try_window_position_activation(hwnd):
+                print(f"✅ 窗口位置激活成功")
+                return True
+            
+            # 重试前等待
+            if attempt < max_retries - 1:
+                time.sleep(0.1 * (2 ** attempt))  # 指数退避
+        
+        print(f"❌ 所有激活策略都失败了")
+        return False
+    
+    def _try_alt_key_activation(self, hwnd: int) -> bool:
+        """策略1: 使用ALT键技巧激活窗口"""
+        try:
+            # 发送ALT键来解除前台锁定
+            try:
+                import win32com.client
+                shell = win32com.client.Dispatch("WScript.Shell")
+                shell.SendKeys('%')  # 发送ALT键
+                time.sleep(0.05)
+            except:
+                # 如果COM方法失败，使用直接的键盘输入
+                win32api.keybd_event(0x12, 0, 0, 0)  # ALT down
+                win32api.keybd_event(0x12, 0, win32con.KEYEVENTF_KEYUP, 0)  # ALT up
+                time.sleep(0.05)
+            
+            # 恢复窗口（如果最小化）
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.1)
+            
+            # 尝试设置前台窗口
+            win32gui.SetForegroundWindow(hwnd)
+            time.sleep(0.05)
+            
+            # 验证是否成功
+            return win32gui.GetForegroundWindow() == hwnd
+            
+        except Exception as e:
+            print(f"ALT键激活失败: {e}")
+            return False
+    
+    def _try_traditional_activation(self, hwnd: int) -> bool:
+        """策略2: 传统激活方法"""
+        try:
+            # 恢复窗口
+            if win32gui.IsIconic(hwnd):
+                win32gui.ShowWindow(hwnd, win32con.SW_RESTORE)
+                time.sleep(0.1)
+            
+            # 显示窗口
+            win32gui.ShowWindow(hwnd, win32con.SW_SHOW)
+            
+            # 设置前台窗口
+            win32gui.SetForegroundWindow(hwnd)
+            
+            # 置顶窗口
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_TOP, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+            
+            time.sleep(0.05)
+            return win32gui.GetForegroundWindow() == hwnd
+            
+        except Exception as e:
+            print(f"传统激活失败: {e}")
+            return False
+    
+    def _try_thread_attach_activation(self, hwnd: int) -> bool:
+        """策略3: 线程输入附加方法"""
+        try:
+            # 获取前台窗口的线程ID
+            current_fg = win32gui.GetForegroundWindow()
+            if current_fg == 0:
+                return False
+            
+            current_thread = win32process.GetWindowThreadProcessId(current_fg)[0]
+            target_thread = win32process.GetWindowThreadProcessId(hwnd)[0]
+            
+            if current_thread != target_thread:
+                # 附加线程输入
+                win32process.AttachThreadInput(current_thread, target_thread, True)
+                try:
+                    # 激活窗口
+                    win32gui.SetForegroundWindow(hwnd)
+                    win32gui.SetFocus(hwnd)
+                    time.sleep(0.05)
+                    result = win32gui.GetForegroundWindow() == hwnd
+                finally:
+                    # 分离线程输入
+                    win32process.AttachThreadInput(current_thread, target_thread, False)
+                
+                return result
+            else:
+                return False
+                
+        except Exception as e:
+            print(f"线程附加激活失败: {e}")
+            return False
+    
+    def _try_window_position_activation(self, hwnd: int) -> bool:
+        """策略4: 窗口位置激活方法"""
+        try:
+            # 将窗口置于最顶层
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_TOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+            time.sleep(0.02)
+            
+            # 取消置顶，但保持在普通窗口的最前面
+            win32gui.SetWindowPos(
+                hwnd, win32con.HWND_NOTOPMOST, 0, 0, 0, 0,
+                win32con.SWP_NOMOVE | win32con.SWP_NOSIZE
+            )
+            
+            # 尝试设置焦点
+            try:
+                win32gui.SetForegroundWindow(hwnd)
+            except:
+                pass
+            
+            time.sleep(0.05)
+            return win32gui.GetForegroundWindow() == hwnd
+            
+        except Exception as e:
+            print(f"窗口位置激活失败: {e}")
+            return False
+    
+    def activate_multiple_windows(self, hwnds: List[int], delay: float = 0.1, switch_id: str = None) -> Dict[int, bool]:
+        """批量激活多个窗口（支持中止）
         
         Args:
             hwnds: 窗口句柄列表
             delay: 窗口间切换延迟（秒）
+            switch_id: 切换操作ID，用于中止检测
             
         Returns:
             每个窗口的激活结果 {hwnd: success}
@@ -304,9 +430,22 @@ class WindowManager:
         if not hwnds:
             return results
         
-        print(f"正在激活 {len(hwnds)} 个窗口...")
+        with self._switch_lock:
+            # 设置当前切换ID
+            self._current_switch_id = switch_id
+            self._abort_switch = False
+        
+        print(f"正在激活 {len(hwnds)} 个窗口... (ID: {switch_id})")
         
         for i, hwnd in enumerate(hwnds):
+            # 检查是否需要中止
+            if self._should_abort_switch(switch_id):
+                print(f"⚠️ 切换已中止 (ID: {switch_id})")
+                # 将剩余窗口标记为失败
+                for remaining_hwnd in hwnds[i:]:
+                    results[remaining_hwnd] = False
+                break
+            
             try:
                 success = self.activate_window(hwnd)
                 results[hwnd] = success
@@ -318,16 +457,30 @@ class WindowManager:
                     title = window_info.title if window_info else "Unknown"
                     print(f"✗ 激活失败 {i+1}/{len(hwnds)}: {hwnd} ({title})")
                 
-                # 窗口间延迟，避免切换过快
+                # 窗口间延迟，同时检查中止
                 if i < len(hwnds) - 1 and delay > 0:
-                    time.sleep(delay)
+                    # 分段延迟，更快响应中止
+                    sleep_steps = max(1, int(delay * 10))  # 100ms步长
+                    step_delay = delay / sleep_steps
+                    
+                    for _ in range(sleep_steps):
+                        if self._should_abort_switch(switch_id):
+                            break
+                        time.sleep(step_delay)
                     
             except Exception as e:
                 print(f"激活窗口时出错 {hwnd}: {e}")
                 results[hwnd] = False
         
+        # 清理当前切换ID
+        with self._switch_lock:
+            if self._current_switch_id == switch_id:
+                self._current_switch_id = None
+        
         success_count = sum(1 for success in results.values() if success)
-        print(f"激活完成: {success_count}/{len(hwnds)} 个窗口成功")
+        aborted = self._abort_switch and switch_id
+        status = "已中止" if aborted else "完成"
+        print(f"激活{status}: {success_count}/{len(hwnds)} 个窗口成功 (ID: {switch_id})")
         
         return results
     
@@ -419,6 +572,51 @@ class WindowManager:
             return process_name.split('\\')[-1] if process_name else "Unknown"
         except Exception:
             return "Unknown"
+    
+    def abort_current_switch(self, new_switch_id: str = None) -> bool:
+        """中止当前正在进行的切换操作
+        
+        Args:
+            new_switch_id: 新的切换ID（可选）
+            
+        Returns:
+            是否有切换被中止
+        """
+        with self._switch_lock:
+            if self._current_switch_id is not None:
+                print(f"⚠️ 中止当前切换: {self._current_switch_id}")
+                self._abort_switch = True
+                
+                # 等待一小段时间让当前切换检测到中止
+                time.sleep(0.05)
+                return True
+            return False
+    
+    def _should_abort_switch(self, switch_id: str) -> bool:
+        """检查是否应该中止当前切换
+        
+        Args:
+            switch_id: 当前切换ID
+            
+        Returns:
+            是否应该中止
+        """
+        if not switch_id:
+            return False
+            
+        with self._switch_lock:
+            # 如果中止标志为真且当前切换ID匹配
+            if self._abort_switch and self._current_switch_id == switch_id:
+                return True
+            # 如果当前切换ID已经变更，也要中止
+            if self._current_switch_id != switch_id:
+                return True
+            return False
+    
+    def get_current_switch_id(self) -> Optional[str]:
+        """获取当前正在执行的切换ID"""
+        with self._switch_lock:
+            return self._current_switch_id
     
     def invalidate_cache(self):
         """清除窗口缓存，强制下次重新枚举"""

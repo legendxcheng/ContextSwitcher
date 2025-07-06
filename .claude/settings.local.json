@@ -12,7 +12,11 @@
       "Bash(pip install:*)",
       "Bash(pip3 list:*)",
       "Bash(ls:*)",
-      "Bash(rg:*)"
+      "Bash(rg:*)",
+      "WebFetch(domain:freesimplegui.readthedocs.io)",
+      "Bash(git add:*)",
+      "Bash(git config:*)",
+      "Bash(git commit:*)"
     ],
     "deny": []
   }

@@ -50,6 +50,11 @@ class HotkeyManager:
         self.last_hotkey_time = 0
         self.hotkey_debounce = 0.2  # 防抖间隔（秒）
         
+        # 切换状态管理
+        self._switching_lock = threading.Lock()
+        self._is_switching = False
+        self._last_switch_key = None
+        
         # 回调函数
         self.on_hotkey_pressed: Optional[Callable[[str, int], None]] = None
         self.on_hotkey_error: Optional[Callable[[str], None]] = None
@@ -254,24 +259,52 @@ class HotkeyManager:
         return target_key_found
     
     def _handle_hotkey(self, hotkey_name: str, hotkey_info: Dict[str, Any]):
-        """处理热键触发"""
+        """处理热键触发（支持并发切换中止）"""
         try:
             task_index = hotkey_info["task_index"]
             
-            print(f"热键触发: {hotkey_name} -> 任务 {task_index + 1}")
+            # 使用锁确保同时只有一个切换请求被处理
+            with self._switching_lock:
+                # 检查是否是重复的热键
+                if self._last_switch_key == hotkey_name:
+                    print(f"⚠️ 忽略重复热键: {hotkey_name}")
+                    return
+                
+                print(f"热键触发: {hotkey_name} -> 任务 {task_index + 1}")
+                
+                # 如果当前有切换在进行，这个新请求会自动中止旧的切换
+                if self._is_switching:
+                    print(f"⚠️ 中止当前切换，开始新的切换到任务 {task_index + 1}")
+                
+                # 标记正在切换
+                self._is_switching = True
+                self._last_switch_key = hotkey_name
             
-            # 切换到指定任务
-            success = self.task_manager.switch_to_task(task_index)
-            
-            if not success:
-                print(f"切换到任务 {task_index + 1} 失败")
-            
-            # 触发回调
-            if self.on_hotkey_pressed:
-                self.on_hotkey_pressed(hotkey_name, task_index)
+            # 在锁外执行切换（避免阻塞其他热键）
+            try:
+                # 切换到指定任务（TaskManager会自动处理中止逻辑）
+                success = self.task_manager.switch_to_task(task_index)
+                
+                if not success:
+                    print(f"切换到任务 {task_index + 1} 失败")
+                
+                # 触发回调
+                if self.on_hotkey_pressed:
+                    self.on_hotkey_pressed(hotkey_name, task_index)
+                    
+            finally:
+                # 重置切换状态
+                with self._switching_lock:
+                    self._is_switching = False
+                    self._last_switch_key = None
                 
         except Exception as e:
             print(f"处理热键失败: {e}")
+            # 确保异常时也重置状态
+            with self._switching_lock:
+                self._is_switching = False
+                self._last_switch_key = None
+            
             if self.on_hotkey_error:
                 self.on_hotkey_error(f"处理热键失败: {e}")
     
