@@ -55,6 +55,15 @@ class MainWindow:
         self.last_refresh = 0
         self.refresh_interval = 2.0  # 秒
         
+        # 表格选中状态保存
+        self.preserved_selection = None
+        
+        # 待机时间监控
+        self.monitoring_timer = None
+        self.last_monitoring = 0
+        self.monitoring_interval = 60.0  # 监控间隔：60秒
+        self.toast_manager = None  # 将在启动时初始化
+        
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
         
@@ -88,17 +97,17 @@ class MainWindow:
                      font=("Segoe UI", 10), border_width=0, tooltip="关闭")
         ]
         
-        # 现代化任务表格 - 清晰标题
-        table_headings = ["#", "任务", "窗口", "状态"]
+        # 现代化任务表格 - 增加待机时间列
+        table_headings = ["#", "任务", "窗口", "状态", "待机时间"]
         table_data = []
         
-        # 创建精确控制宽度的表格
+        # 创建精确控制宽度的表格，增加待机时间列
         compact_table = ModernUIConfig.create_modern_table(
             values=table_data,
             headings=table_headings,
             key="-TASK_TABLE-",
             num_rows=4,
-            col_widths=[2, 10, 3, 4]  # 调整列宽使标题更清楚
+            col_widths=[2, 12, 3, 3, 6]  # 调整列宽：[编号, 任务名, 窗口数, 状态, 待机时间]
         )
         # 确保表格不会扩展
         compact_table.expand_x = False
@@ -160,6 +169,9 @@ class MainWindow:
         # 保存表格组件引用
         self.table_widget = window["-TASK_TABLE-"]
         
+        # 绑定双击事件
+        self.table_widget.bind('<Double-Button-1>', ' Double')
+        
         return window
     
     def show(self):
@@ -169,6 +181,9 @@ class MainWindow:
         
         self.running = True
         self._update_display()
+        
+        # 初始化Toast管理器
+        self._initialize_toast_manager()
         
         # 设置任务管理器回调
         self.task_manager.on_task_added = self._on_task_changed
@@ -268,11 +283,19 @@ class MainWindow:
                 elif event == "-TASK_TABLE-":
                     self._handle_table_selection(values)
                 
+                elif event == "-TASK_TABLE- Double":
+                    self._handle_table_double_click(values)
+                
                 # 定期刷新显示
                 current_time = time.time()
                 if current_time - self.last_refresh > self.refresh_interval:
                     self._update_display()
                     self.last_refresh = current_time
+                
+                # 定期监控待机时间
+                if current_time - self.last_monitoring > self.monitoring_interval:
+                    self._check_idle_tasks()
+                    self.last_monitoring = current_time
                 
             except Exception as e:
                 print(f"GUI事件处理错误: {e}")
@@ -287,6 +310,19 @@ class MainWindow:
             return
         
         try:
+            # 确定要使用的选中状态（优先使用保存的状态）
+            selection_to_restore = self.preserved_selection
+            
+            # 如果没有保存的状态，尝试获取当前选中状态
+            if selection_to_restore is None:
+                try:
+                    table_widget = self.window["-TASK_TABLE-"]
+                    if hasattr(table_widget, 'SelectedRows') and table_widget.SelectedRows:
+                        selection_to_restore = table_widget.SelectedRows[0]
+                        print(f"💾 检测到当前选中状态: 行 {selection_to_restore}")
+                except Exception as e:
+                    print(f"⚠️ 获取选中状态失败: {e}")
+            
             # 更新任务表格和行颜色
             table_data = self._get_table_data()
             row_colors = self._get_row_colors()
@@ -297,6 +333,14 @@ class MainWindow:
             
             # 更新表格数据和行颜色
             self.window["-TASK_TABLE-"].update(values=table_data, row_colors=row_colors)
+            
+            # 恢复选中状态
+            if selection_to_restore is not None and selection_to_restore < len(table_data):
+                try:
+                    self.window["-TASK_TABLE-"].update(select_rows=[selection_to_restore])
+                    print(f"🔄 恢复选中状态: 行 {selection_to_restore}")
+                except Exception as e:
+                    print(f"⚠️ 恢复选中状态失败: {e}")
             
             # 更新状态
             task_count = len(self.task_manager.get_all_tasks())
@@ -325,8 +369,8 @@ class MainWindow:
             
             # 任务名称 - 适配调整后的列宽
             task_name = task.name
-            if len(task_name) > 8:
-                task_name = task_name[:6] + ".."
+            if len(task_name) > 15:
+                task_name = task_name[:13] + ".."
             
             # 绑定窗口数量 - 紧凑显示
             valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
@@ -354,8 +398,13 @@ class MainWindow:
                 else:
                     status = "⚪"  # 空闲 - 白色圆点
             
-            # 新的4列格式：编号、任务名、窗口数、状态
-            table_data.append([task_num, task_name, windows_info, status])
+            # 待机时间计算
+            from utils.time_helper import calculate_task_idle_time
+            is_current = (i == current_index)
+            idle_minutes, idle_display, needs_warning = calculate_task_idle_time(task, is_current)
+            
+            # 新的5列格式：编号、任务名、窗口数、状态、待机时间
+            table_data.append([task_num, task_name, windows_info, status, idle_display])
         
         return table_data
     
@@ -368,11 +417,19 @@ class MainWindow:
         # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
         # 必须为所有行明确设置颜色，否则之前的颜色不会被清除
         for i, task in enumerate(tasks):
+            # 计算待机时间以确定是否需要警告
+            from utils.time_helper import calculate_task_idle_time
+            is_current = (i == current_index)
+            idle_minutes, idle_display, needs_warning = calculate_task_idle_time(task, is_current)
+            
             if i == current_index:
                 # 当前任务：绿色高亮
                 row_colors.append((i, '#00DD00', '#2D2D2D'))  # 亮绿色文字, 深灰背景
+            elif needs_warning:
+                # 超时任务：红色警告（仅针对待机时间列）
+                row_colors.append((i, '#FF4444', '#202020'))  # 红色文字, 默认背景
             else:
-                # 非当前任务：恢复默认白色
+                # 普通任务：恢复默认白色
                 row_colors.append((i, '#FFFFFF', '#202020'))  # 白色文字, 默认背景
         
         return row_colors
@@ -611,12 +668,52 @@ class MainWindow:
             selected_rows = values.get("-TASK_TABLE-", [])
             if selected_rows:
                 task_index = selected_rows[0]
+                # 保存选中状态
+                self.preserved_selection = task_index
+                print(f"📌 用户选择任务: 行 {task_index}")
+                
                 task = self.task_manager.get_task_by_index(task_index)
                 if task:
                     self._set_status(f"已选择: {task.name}", 2000)
+            else:
+                # 清除选中状态
+                self.preserved_selection = None
+                print("🔹 清除选择状态")
             
         except Exception as e:
             print(f"处理表格选择失败: {e}")
+    
+    def _handle_table_double_click(self, values: Dict[str, Any]):
+        """处理表格双击事件 - 切换到任务窗口"""
+        try:
+            selected_rows = values.get("-TASK_TABLE-", [])
+            if not selected_rows:
+                print("⚠️ 双击事件：没有选中的任务")
+                return
+            
+            task_index = selected_rows[0]
+            task = self.task_manager.get_task_by_index(task_index)
+            
+            if not task:
+                print(f"⚠️ 找不到索引为 {task_index} 的任务")
+                return
+            
+            print(f"🖱️ 双击任务: {task.name}")
+            self._set_status(f"正在切换到: {task.name}", 1000)
+            
+            # 使用任务管理器切换到该任务
+            success = self.task_manager.switch_to_task(task_index)
+            
+            if success:
+                print(f"✅ 成功切换到任务: {task.name}")
+                self._set_status(f"已切换到: {task.name}", 3000)
+            else:
+                print(f"❌ 切换任务失败: {task.name}")
+                self._set_status(f"切换失败: {task.name}", 3000)
+            
+        except Exception as e:
+            print(f"处理表格双击失败: {e}")
+            self._set_status("切换任务失败", 2000)
     
     def _set_status(self, message: str, duration_ms: int = 0):
         """设置状态消息
@@ -646,6 +743,8 @@ class MainWindow:
     def _on_task_changed(self, task: Task):
         """任务变化回调"""
         if self.running:
+            # 任务发生变化时，清除保存的选中状态以避免索引错位
+            self.preserved_selection = None
             self._update_display()
     
     def _on_task_switched(self, task: Task, index: int):
@@ -653,3 +752,85 @@ class MainWindow:
         if self.running:
             self._update_display()
             self._set_status(f"已切换到: {task.name}", 3000)
+    
+    def _initialize_toast_manager(self):
+        """初始化Toast管理器"""
+        try:
+            from utils.toast_manager import get_toast_manager
+            
+            self.toast_manager = get_toast_manager()
+            
+            # 从配置读取设置
+            monitoring_config = self.config.get_monitoring_config()
+            cooldown_minutes = monitoring_config.get('toast_cooldown_minutes', 30)
+            self.toast_manager.set_cooldown_minutes(cooldown_minutes)
+            
+            # 设置点击回调
+            self.toast_manager.on_toast_clicked = self._on_toast_clicked
+            
+            print("✓ Toast管理器初始化完成")
+            
+        except Exception as e:
+            print(f"初始化Toast管理器失败: {e}")
+            self.toast_manager = None
+    
+    def _check_idle_tasks(self):
+        """检查并处理待机时间超时的任务"""
+        try:
+            monitoring_config = self.config.get_monitoring_config()
+            
+            # 检查是否启用通知
+            if not monitoring_config.get('toast_notifications_enabled', True):
+                return
+            
+            if not self.toast_manager:
+                return
+            
+            # 获取超时任务
+            from utils.time_helper import get_overdue_tasks
+            current_task_index = self.task_manager.current_task_index
+            overdue_tasks = get_overdue_tasks(self.task_manager.get_all_tasks(), current_task_index)
+            
+            if not overdue_tasks:
+                return
+            
+            # 发送通知
+            if len(overdue_tasks) == 1:
+                # 单个任务通知
+                task_info = overdue_tasks[0]
+                self.toast_manager.send_idle_task_notification(
+                    task_info['task'].name,
+                    task_info['task'].id,
+                    task_info['display_time']
+                )
+            else:
+                # 多个任务汇总通知
+                self.toast_manager.send_multiple_tasks_notification(overdue_tasks)
+            
+        except Exception as e:
+            print(f"检查待机任务失败: {e}")
+    
+    def _on_toast_clicked(self, task_id: str):
+        """Toast通知点击回调"""
+        try:
+            # 查找对应的任务
+            task = self.task_manager.get_task_by_id(task_id)
+            if not task:
+                print(f"找不到任务: {task_id}")
+                return
+            
+            # 获取任务索引
+            all_tasks = self.task_manager.get_all_tasks()
+            for i, t in enumerate(all_tasks):
+                if t.id == task_id:
+                    # 切换到该任务
+                    success = self.task_manager.switch_to_task(i)
+                    if success:
+                        self._set_status(f"通过通知切换到: {task.name}", 3000)
+                        print(f"✓ 通过Toast通知切换到任务: {task.name}")
+                    else:
+                        print(f"✗ 切换到任务失败: {task.name}")
+                    break
+            
+        except Exception as e:
+            print(f"处理Toast点击失败: {e}")

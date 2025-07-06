@@ -52,6 +52,13 @@ class Config:
                 "virtual_desktop": False,  # 实验性功能默认关闭
                 "system_tray": False,
                 "startup_with_windows": False
+            },
+            "monitoring": {
+                "idle_time_warning_minutes": 10,  # 待机时间警告阈值（分钟）
+                "toast_notifications_enabled": True,  # 启用Toast通知
+                "toast_cooldown_minutes": 30,  # Toast通知冷却时间（分钟）
+                "check_interval_seconds": 60,  # 检查间隔（秒）
+                "show_idle_time_column": True  # 显示待机时间列
             }
         }
         
@@ -181,6 +188,10 @@ class Config:
     def get_window_config(self) -> Dict[str, Any]:
         """获取窗口配置"""
         return self.get('window', {})
+    
+    def get_monitoring_config(self) -> Dict[str, Any]:
+        """获取监控配置"""
+        return self.get('monitoring', {})
     
     def update_window_position(self, x: int, y: int, width: int, height: int) -> bool:
         """更新窗口位置和大小"""

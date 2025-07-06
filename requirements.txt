@@ -11,6 +11,9 @@ pynput>=1.7.6
 # Image Processing (for icon conversion)
 Pillow>=9.0.0
 
+# Toast Notifications (Windows 10/11)
+win10toast>=0.9
+
 # Optional: System Tray Support
 # FreeSimpleGUIWx>=0.1.0
 

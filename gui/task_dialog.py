@@ -46,6 +46,20 @@ class TaskDialog:
         self.task_description = ""
         self.task_status = TaskStatus.TODO
         self.selected_windows: List[WindowInfo] = []
+        
+        # 搜索和过滤相关
+        self.window_filter_text = ""
+        self._filtered_windows = []
+        self._current_priorities = {}
+        
+        # 导入增强功能模块
+        from utils.search_helper import SearchHelper
+        from utils.window_priority import WindowPriorityManager
+        self.search_helper = SearchHelper()
+        self.priority_manager = WindowPriorityManager()
+        
+        # 编辑模式标识
+        self._editing_task_id = None
     
     def show_add_dialog(self) -> bool:
         """显示添加任务对话框
@@ -53,11 +67,19 @@ class TaskDialog:
         Returns:
             是否成功添加任务
         """
+        # 清除编辑模式标识
+        self._editing_task_id = None
+        
         # 重置表单数据
         self.task_name = ""
         self.task_description = ""
         self.task_status = TaskStatus.TODO
         self.selected_windows = []
+        
+        # 重置搜索状态
+        self.window_filter_text = ""
+        self._filtered_windows = []
+        self._current_priorities = {}
         
         # 创建对话框
         layout = self._create_add_layout()
@@ -71,13 +93,13 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(620, 580),  # 适配现代化界面
-            location=(200, 150),
+            size=(620, 650),  # 减少高度并让Frame自动扩展填充
+            location=(200, 100),  # 调整位置以便更好显示
             no_titlebar=False,  # 对话框保留标题栏
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
-            margins=(12, 10),
-            element_padding=(4, 3),
+            margins=(10, 8),  # 减少边距
+            element_padding=(3, 2),  # 减少元素间距
             icon=icon_path if icon_path else None
         )
         
@@ -115,6 +137,9 @@ class TaskDialog:
         Returns:
             是否成功编辑任务
         """
+        # 设置编辑模式标识
+        self._editing_task_id = task.id
+        
         # 加载现有数据
         self.task_name = task.name
         self.task_description = task.description
@@ -128,6 +153,11 @@ class TaskDialog:
                 if window_info:
                     self.selected_windows.append(window_info)
         
+        # 重置搜索状态
+        self.window_filter_text = ""
+        self._filtered_windows = []
+        self._current_priorities = {}
+        
         # 创建对话框
         layout = self._create_edit_layout()
         # 获取图标路径
@@ -140,13 +170,13 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(620, 580),  # 适配现代化界面
-            location=(200, 150),
+            size=(620, 650),  # 减少高度并让Frame自动扩展填充
+            location=(200, 100),  # 调整位置以便更好显示
             no_titlebar=False,  # 对话框保留标题栏
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
-            margins=(12, 10),
-            element_padding=(4, 3),
+            margins=(10, 8),  # 减少边距
+            element_padding=(3, 2),  # 减少元素间距
             icon=icon_path if icon_path else None
         )
         
@@ -211,13 +241,22 @@ class TaskDialog:
             sg.Push()
         ]
         
-        # 完整布局
-        layout = [
+        print("🔍 调试: 按钮区域已创建")
+        
+        # 使用Column来更好地控制布局
+        main_column = [
             [sg.Frame("任务信息", info_frame, expand_x=True, 
                      element_justification="left")],
-            [sg.Frame("绑定窗口", window_frame, expand_x=True, expand_y=False)],  # 不允许垂直扩展
-            [sg.Text("")],  # 添加一行空白分隔
-            button_row  # 确保按钮在最后
+            [sg.Frame("绑定窗口", window_frame, expand_x=True, expand_y=True)],  # 允许垂直扩展以填充空间
+        ]
+        
+        # 完整布局
+        layout = [
+            [sg.Column(main_column, expand_x=True, expand_y=True, 
+                      scrollable=False, vertical_scroll_only=False,
+                      size=(None, None))],  # 让Column自动调整大小
+            [sg.HorizontalSeparator()],
+            button_row  # 按钮单独一行，确保始终可见
         ]
         
         return layout
@@ -227,16 +266,27 @@ class TaskDialog:
         # 初始化空的窗口列表数据，稍后通过_refresh_window_list填充
         window_data = []
         
-        # 窗口选择表格
-        table_headings = ["选择", "窗口标题", "进程", "句柄"]
+        # 窗口选择表格（添加优先级列）
+        table_headings = ["选择", "优先级", "窗口标题", "进程", "句柄"]
         
         window_frame = [
             [sg.Text("选择要绑定到此任务的窗口:")],
             [sg.Text("操作: 1.双击窗口行直接添加  2.或点击选中后点击'添加选择'按钮", font=("Arial", 9), text_color="#666666")],
+            # 搜索行
+            [sg.Text("🔍 搜索:", font=("Arial", 10), text_color="#0078D4"),
+             sg.Input("", key="-WINDOW_FILTER-", size=(20, 1), 
+                     enable_events=True, 
+                     tooltip="输入关键词搜索窗口标题或进程名"),
+             sg.Button("×", key="-CLEAR_FILTER-", size=(2, 1), 
+                      button_color=("#666666", "#F0F0F0"),
+                      tooltip="清空搜索"),
+             sg.Text("输入关键词过滤窗口", font=("Arial", 8), text_color="#888888")],
             [sg.Button("刷新窗口列表", key="-REFRESH_WINDOWS-", size=(12, 1),
                       button_color=("#FFFFFF", "#0078D4"), font=("Segoe UI", 9), border_width=0),
              sg.Button("添加选择", key="-ADD_WINDOW-", size=(10, 1), 
-                      button_color=("#FFFFFF", "#107C10"), font=("Segoe UI", 9), border_width=0)],
+                      button_color=("#FFFFFF", "#107C10"), font=("Segoe UI", 9), border_width=0),
+             sg.Text("", key="-FILTER_COUNT-", size=(15, 1), 
+                    text_color="#666666", font=("Arial", 9))],
             [sg.Table(
                 values=window_data,
                 headings=table_headings,
@@ -244,24 +294,25 @@ class TaskDialog:
                 enable_events=True,
                 select_mode=sg.TABLE_SELECT_MODE_BROWSE,
                 auto_size_columns=False,
-                col_widths=[6, 30, 15, 12],
+                col_widths=[6, 8, 25, 12, 10],  # 调整列宽以适应优先级列
                 justification="left",
                 alternating_row_color="#404040",
                 selected_row_colors="#CCCCCC on #0078D4",
                 header_background_color="#2D2D2D",
                 header_text_color="#FFFFFF",
                 font=("Arial", 9),
-                num_rows=6,  # 适中的行数显示
+                num_rows=8,  # 增加行数以更好利用空间
                 expand_x=True,
-                expand_y=False  # 不允许垂直扩展
+                expand_y=True  # 允许垂直扩展
             )],
             [sg.Text("已选择窗口:", font=("Arial", 10, "bold"))],
             [sg.Listbox(
                 values=[f"{w.title} ({w.process_name})" for w in self.selected_windows],
                 key="-SELECTED_WINDOWS-",
-                size=(50, 5),  # 增加高度以便更好显示
+                size=(50, 6),  # 基础高度
                 enable_events=True,
-                expand_x=True
+                expand_x=True,
+                expand_y=True  # 允许垂直扩展以填充剩余空间
             )],
             [sg.Button("移除选择", key="-REMOVE_WINDOW-", size=(10, 1),
                       button_color=("#FFFFFF", "#D13438"), font=("Segoe UI", 9), border_width=0)]
@@ -307,11 +358,24 @@ class TaskDialog:
                 
                 elif event == "-REMOVE_WINDOW-":
                     self._handle_remove_window(values)
+                
+                elif event == "-WINDOW_FILTER-":
+                    # 处理搜索过滤
+                    self.window_filter_text = values["-WINDOW_FILTER-"].strip()
+                    self._refresh_window_list()
+                
+                elif event == "-CLEAR_FILTER-":
+                    # 清空搜索
+                    self.dialog_window["-WINDOW_FILTER-"].update("")
+                    self.window_filter_text = ""
+                    self._refresh_window_list()
         
         finally:
             if self.dialog_window:
                 self.dialog_window.close()
                 self.dialog_window = None
+            # 清理编辑模式标识
+            self._editing_task_id = None
     
     def _validate_form(self, values: Dict[str, Any]) -> bool:
         """验证表单数据"""
@@ -326,7 +390,8 @@ class TaskDialog:
         for task in existing_tasks:
             if task.name == task_name:
                 # 如果是编辑模式且是同一个任务，则允许
-                if hasattr(self, '_editing_task_id') and task.id == self._editing_task_id:
+                if hasattr(self, '_editing_task_id') and self._editing_task_id is not None and task.id == self._editing_task_id:
+                    print(f"🔍 编辑模式：跳过当前任务 {task.id} 的名称验证")
                     continue
                 sg.popup(f"任务名称 '{task_name}' 已存在", title="验证错误")
                 return False
@@ -352,7 +417,7 @@ class TaskDialog:
         self.task_status = self._text_to_status(status_text)
     
     def _refresh_window_list(self):
-        """刷新窗口列表"""
+        """刷新窗口列表（增强版，支持搜索和优先级）"""
         if not self.dialog_window:
             return
         
@@ -361,26 +426,111 @@ class TaskDialog:
             self.task_manager.window_manager.invalidate_cache()
             
             # 获取最新窗口列表
-            available_windows = self.task_manager.window_manager.enumerate_windows()
+            all_windows = self.task_manager.window_manager.enumerate_windows()
+            
+            # 应用搜索过滤和智能排序
+            filtered_windows = self._filter_and_sort_windows(all_windows)
+            self._filtered_windows = filtered_windows
             
             # 更新表格数据
             window_data = []
             selected_hwnds = [w.hwnd for w in self.selected_windows]
             
-            for window in available_windows:
+            for window in filtered_windows:
                 is_selected = window.hwnd in selected_hwnds
+                
+                # 获取优先级信息
+                priority_info = self._current_priorities.get(window.hwnd)
+                priority_indicator = ""
+                
+                if priority_info:
+                    # 根据窗口类型显示不同的优先级图标
+                    if priority_info.is_foreground:
+                        priority_indicator = "🔥"  # 前台窗口
+                    elif priority_info.is_active:
+                        priority_indicator = "⭐"  # 活跃窗口
+                    elif priority_info.is_recent:
+                        priority_indicator = "📌"  # 最近使用
+                    elif priority_info.search_score > 0:
+                        priority_indicator = "🔍"  # 搜索匹配
+                    elif priority_info.total_score > 50:
+                        priority_indicator = "💻"  # 高优先级应用
+                
+                # 显示文本处理（如果有搜索关键词）
+                display_title = window.title
+                display_process = window.process_name
+                
+                if self.window_filter_text:
+                    # 移除高亮标记用于表格显示
+                    from utils.search_helper import SearchHelper
+                    # 这里可以添加高亮处理，暂时保持原文本
+                    pass
+                
                 window_data.append([
                     "✓" if is_selected else "",
-                    window.title,
-                    window.process_name,
+                    priority_indicator,
+                    display_title,
+                    display_process,
                     str(window.hwnd)
                 ])
             
+            # 更新表格
             self.dialog_window["-WINDOW_TABLE-"].update(values=window_data)
+            
+            # 更新搜索统计信息
+            total_count = len(all_windows)
+            filtered_count = len(filtered_windows)
+            
+            if self.window_filter_text:
+                filter_info = f"显示 {filtered_count}/{total_count}"
+            else:
+                filter_info = f"共 {total_count} 个窗口"
+            
+            if "-FILTER_COUNT-" in self.dialog_window.AllKeysDict:
+                self.dialog_window["-FILTER_COUNT-"].update(filter_info)
             
         except Exception as e:
             print(f"刷新窗口列表失败: {e}")
             sg.popup(f"刷新失败: {e}", title="错误")
+    
+    def _filter_and_sort_windows(self, windows: List[WindowInfo]) -> List[WindowInfo]:
+        """使用智能排序和搜索过滤窗口列表"""
+        try:
+            # 获取活跃窗口信息
+            active_windows_info = self.task_manager.window_manager.get_active_windows_info()
+            
+            # 搜索过滤
+            search_results_dict = {}
+            filtered_windows = windows
+            
+            if self.window_filter_text:
+                # 使用搜索功能
+                search_results = self.search_helper.search_windows(windows, self.window_filter_text)
+                
+                # 存储搜索结果
+                search_results_dict = {
+                    result.item.hwnd: result for result in search_results
+                }
+                
+                # 过滤出有匹配的窗口
+                filtered_windows = [result.item for result in search_results]
+            
+            # 使用优先级管理器进行智能排序
+            priorities = self.priority_manager.calculate_window_priorities(
+                filtered_windows, active_windows_info, search_results_dict
+            )
+            
+            # 存储优先级信息用于显示
+            self._current_priorities = {
+                priority.window.hwnd: priority for priority in priorities
+            }
+            
+            # 返回按优先级排序的窗口列表
+            return [priority.window for priority in priorities]
+            
+        except Exception as e:
+            print(f"过滤和排序窗口失败: {e}")
+            return windows  # 出错时返回原始列表
     
     def _handle_table_click(self, values: Dict[str, Any]):
         """处理表格单击事件"""
@@ -458,13 +608,13 @@ class TaskDialog:
                 return
             
             # 检查行数据格式
-            if not isinstance(table_data[row_index], list) or len(table_data[row_index]) < 4:
+            if not isinstance(table_data[row_index], list) or len(table_data[row_index]) < 5:
                 print(f"表格行数据格式异常: {table_data[row_index]}")
                 sg.popup("表格行数据格式异常", title="错误")
                 return
             
-            # 获取窗口句柄
-            hwnd_str = table_data[row_index][3]
+            # 获取窗口句柄 (新表格结构中句柄在第4列，索引为4)
+            hwnd_str = table_data[row_index][4]
             hwnd = int(hwnd_str)
             
             # 检查是否已经选择
@@ -507,12 +657,12 @@ class TaskDialog:
             row_data = table_data[row_index]
             print(f"📋 行数据: {row_data}")
             
-            if not isinstance(row_data, list) or len(row_data) < 4:
+            if not isinstance(row_data, list) or len(row_data) < 5:
                 print(f"❌ 表格行数据格式异常: {row_data}")
                 return
             
-            # 获取窗口句柄
-            hwnd_str = row_data[3]
+            # 获取窗口句柄 (新表格结构中句柄在第4列，索引为4)
+            hwnd_str = row_data[4]
             print(f"🎯 窗口句柄字符串: {hwnd_str}")
             hwnd = int(hwnd_str)
             print(f"🎯 窗口句柄: {hwnd}")

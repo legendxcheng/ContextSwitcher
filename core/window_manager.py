@@ -499,6 +499,153 @@ class WindowManager:
         
         return None
     
+    def get_active_windows_info(self) -> Dict[str, Any]:
+        """获取活跃窗口信息（包括多屏幕环境）
+        
+        Returns:
+            包含前台窗口和活跃窗口列表的信息
+        """
+        try:
+            result = {
+                'foreground_window': None,
+                'active_windows': [],
+                'recent_windows': [],
+                'total_windows': 0
+            }
+            
+            # 获取系统前台窗口
+            foreground_hwnd = win32gui.GetForegroundWindow()
+            if foreground_hwnd:
+                foreground_info = self.get_window_info(foreground_hwnd)
+                if foreground_info:
+                    result['foreground_window'] = foreground_info
+            
+            # 获取所有窗口
+            all_windows = self.enumerate_windows()
+            result['total_windows'] = len(all_windows)
+            
+            # 识别活跃窗口（基于窗口属性和状态）
+            active_windows = []
+            recent_windows = []
+            
+            for window in all_windows:
+                try:
+                    # 检查窗口是否可能是活跃的
+                    if self._is_likely_active_window(window):
+                        if window.hwnd == foreground_hwnd:
+                            # 前台窗口有最高优先级
+                            active_windows.insert(0, window)
+                        else:
+                            active_windows.append(window)
+                    
+                    # 收集最近可能使用的窗口
+                    if self._is_recently_used_window(window):
+                        recent_windows.append(window)
+                        
+                except Exception as e:
+                    print(f"分析窗口活跃状态失败 {window.hwnd}: {e}")
+                    continue
+            
+            result['active_windows'] = active_windows[:10]  # 限制数量
+            result['recent_windows'] = recent_windows[:20]  # 限制数量
+            
+            return result
+            
+        except Exception as e:
+            print(f"获取活跃窗口信息失败: {e}")
+            return {
+                'foreground_window': None,
+                'active_windows': [],
+                'recent_windows': [],
+                'total_windows': 0
+            }
+    
+    def _is_likely_active_window(self, window: WindowInfo) -> bool:
+        """判断窗口是否可能是活跃窗口
+        
+        Args:
+            window: 窗口信息
+            
+        Returns:
+            是否可能是活跃窗口
+        """
+        try:
+            # 基本条件：窗口可见且启用
+            if not window.is_visible or not window.is_enabled:
+                return False
+            
+            # 检查窗口是否最小化
+            if win32gui.IsIconic(window.hwnd):
+                return False
+            
+            # 检查窗口大小（过小的窗口通常不是主要工作窗口）
+            left, top, right, bottom = window.rect
+            width = right - left
+            height = bottom - top
+            
+            if width < 200 or height < 100:
+                return False
+            
+            # 检查窗口是否在屏幕可见区域内
+            if left > 3000 or top > 3000 or right < 0 or bottom < 0:
+                return False
+            
+            # 排除一些系统窗口类型
+            excluded_classes = {
+                'Shell_TrayWnd', 'DV2ControlHost', 'Windows.UI.Core.CoreWindow',
+                'WorkerW', 'Progman', 'Button', 'Edit'
+            }
+            
+            if window.class_name in excluded_classes:
+                return False
+            
+            return True
+            
+        except Exception as e:
+            print(f"检查窗口活跃状态失败: {e}")
+            return False
+    
+    def _is_recently_used_window(self, window: WindowInfo) -> bool:
+        """判断窗口是否可能是最近使用的窗口
+        
+        Args:
+            window: 窗口信息
+            
+        Returns:
+            是否可能是最近使用的窗口
+        """
+        try:
+            # 基本的可见性检查
+            if not window.is_visible:
+                return False
+            
+            # 常见的应用程序进程名
+            common_apps = {
+                'chrome.exe', 'firefox.exe', 'edge.exe',           # 浏览器
+                'code.exe', 'devenv.exe', 'notepad++.exe',          # 编辑器
+                'explorer.exe', 'cmd.exe', 'powershell.exe',       # 系统工具
+                'wechat.exe', 'qq.exe', 'dingding.exe',             # 通讯工具
+                'winword.exe', 'excel.exe', 'powerpnt.exe',        # Office
+                'photoshop.exe', 'illustrator.exe',                # 设计工具
+            }
+            
+            process_name = window.process_name.lower()
+            
+            # 如果是常见应用，认为是最近可能使用的
+            if process_name in common_apps:
+                return True
+            
+            # 检查窗口标题是否包含文件名或项目名
+            title_lower = window.title.lower()
+            if any(ext in title_lower for ext in ['.txt', '.doc', '.pdf', '.py', '.js', '.html']):
+                return True
+            
+            return False
+            
+        except Exception as e:
+            print(f"检查窗口最近使用状态失败: {e}")
+            return False
+    
     def find_windows_by_title(self, title: str, exact_match: bool = False) -> List[WindowInfo]:
         """根据标题查找窗口
         

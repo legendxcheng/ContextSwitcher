@@ -170,7 +170,7 @@ class ModernUIConfig:
             enable_events=True,
             select_mode=sg.TABLE_SELECT_MODE_BROWSE,
             auto_size_columns=False,
-            col_widths=col_widths or [2, 10, 3, 4],  # 平衡紧凑与可读性的列宽
+            col_widths=col_widths or [2, 12, 3, 3, 6],  # 平衡紧凑与可读性的列宽：[编号, 任务名, 窗口数, 状态, 待机时间]
             justification='left',
             alternating_row_color=cls.COLORS['surface'],
             selected_row_colors=(cls.COLORS['text'], cls.COLORS['primary']),
