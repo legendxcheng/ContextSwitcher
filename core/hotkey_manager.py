@@ -48,7 +48,7 @@ class HotkeyManager:
         self.pressed_keys = set()
         self.hotkey_combinations = {}
         self.last_hotkey_time = 0
-        self.hotkey_debounce = 0.2  # 防抖间隔（秒）
+        self.hotkey_debounce = 0.5  # 防抖间隔（秒）- 增加到0.5秒
         
         # 回调函数
         self.on_hotkey_error: Optional[Callable[[str], None]] = None
@@ -210,10 +210,11 @@ class HotkeyManager:
                 # 记录热键触发时间
                 self.last_hotkey_time = current_time
                 
+                print(f"🔑 热键触发: {hotkey_name} (防抖: {self.hotkey_debounce}s)")
                 
                 # 处理热键
                 self._handle_hotkey(hotkey_name, hotkey_info)
-                break
+                break  # 找到匹配的热键后立即退出
     
     def _is_hotkey_pressed(self, hotkey_info: Dict[str, Any]) -> bool:
         """检查指定热键是否被按下"""

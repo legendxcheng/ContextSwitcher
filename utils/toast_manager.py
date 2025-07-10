@@ -29,6 +29,18 @@ class ToastManager:
         self.enabled = TOAST_AVAILABLE
         self.toaster = ToastNotifier() if TOAST_AVAILABLE else None
         
+        # 检测callback_on_click支持情况
+        self.supports_callback = False
+        if TOAST_AVAILABLE:
+            try:
+                # 测试是否支持callback_on_click参数
+                import inspect
+                sig = inspect.signature(self.toaster.show_toast)
+                self.supports_callback = 'callback_on_click' in sig.parameters
+                print(f"Toast通知callback支持: {self.supports_callback}")
+            except Exception:
+                self.supports_callback = False
+        
         # 通知历史和冷却管理
         self.notification_history: Dict[str, datetime] = {}  # 任务ID -> 最后通知时间
         self.cooldown_minutes = 30  # 默认冷却时间
@@ -94,21 +106,31 @@ class ToastManager:
             title = "ContextSwitcher - 任务提醒"
             message = f"任务 '{task_name}' 已待机 {idle_time}\n点击切换到该任务"
             
-            # 创建点击回调
-            def on_click():
-                print(f"用户点击了任务通知: {task_name}")
-                if self.on_toast_clicked:
-                    self.on_toast_clicked(task_id)
-            
-            # 发送通知
-            self.toaster.show_toast(
-                title=title,
-                msg=message,
-                icon_path=None,  # 使用默认图标
-                duration=10,     # 显示10秒
-                threaded=True,   # 使用线程避免阻塞
-                callback_on_click=on_click
-            )
+            # 根据支持情况发送通知
+            if self.supports_callback:
+                # 支持点击回调的版本
+                def on_click():
+                    print(f"用户点击了任务通知: {task_name}")
+                    if self.on_toast_clicked:
+                        self.on_toast_clicked(task_id)
+                
+                self.toaster.show_toast(
+                    title=title,
+                    msg=message,
+                    icon_path=None,
+                    duration=10,
+                    threaded=True,
+                    callback_on_click=on_click
+                )
+            else:
+                # 基础版本（不支持点击回调）
+                self.toaster.show_toast(
+                    title=title,
+                    msg=message,
+                    icon_path=None,
+                    duration=10,
+                    threaded=True
+                )
             
             # 记录通知历史
             with self._lock:

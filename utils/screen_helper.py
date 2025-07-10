@@ -114,25 +114,24 @@ class ScreenHelper:
             窗口左上角坐标 (x, y)
         """
         try:
-            # 获取鼠标位置
-            cursor_x, cursor_y = self.get_cursor_position()
-            
             # 获取屏幕信息
             screen_info = self.get_screen_metrics()
             
-            # 计算以鼠标为中心的窗口位置
+            # 计算屏幕中央位置
             window_width, window_height = window_size
+            center_x = screen_info['width'] // 2
+            center_y = screen_info['height'] // 2
             
-            # 初始位置：鼠标位置居中
-            window_x = cursor_x - window_width // 2
-            window_y = cursor_y - window_height // 2
+            # 初始位置：屏幕中央
+            window_x = center_x - window_width // 2
+            window_y = center_y - window_height // 2
             
             # 边界检查和调整
             window_x, window_y = self._adjust_window_position(
                 window_x, window_y, window_width, window_height, screen_info
             )
             
-            print(f"计算窗口位置: 鼠标({cursor_x}, {cursor_y}) -> 窗口({window_x}, {window_y})")
+            print(f"计算窗口位置: 屏幕中央({center_x}, {center_y}) -> 窗口({window_x}, {window_y})")
             
             return (window_x, window_y)
             

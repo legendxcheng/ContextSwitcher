@@ -9,7 +9,7 @@
 """
 
 import time
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, Tuple
 
 try:
     import FreeSimpleGUI as sg
@@ -40,8 +40,8 @@ class TaskSwitcherDialog:
         config = get_config()
         switcher_config = config.get_task_switcher_config()
         
-        # 窗口配置
-        self.window_size = tuple(switcher_config.get("window_size", [800, 700]))
+        # 窗口配置 - 缩小尺寸
+        self.window_size = tuple(switcher_config.get("window_size", [500, 200]))
         self.auto_close_delay = switcher_config.get("auto_close_delay", 2.0)
         self.show_empty_slots = switcher_config.get("show_empty_slots", True)
         self.enabled = switcher_config.get("enabled", True)
@@ -57,14 +57,22 @@ class TaskSwitcherDialog:
         self._auto_executed = False  # 标记是否自动执行
         self.auto_close_start_time = 0  # 自动关闭开始时间
         
-        # 字体配置 - 为大界面优化
+        # 提示窗口冷却机制
+        self.last_hint_time = 0  # 上次显示提示的时间
+        self.hint_cooldown = 5.0  # 提示冷却时间（秒）
+        
+        # 任务切换器显示冷却机制（防止重复触发）
+        self.last_show_time = 0  # 上次显示的时间
+        self.show_cooldown = 1.0  # 显示冷却时间（秒）
+        
+        # 字体配置 - 适配小界面
         self.fonts = {
-            'task_title': ('Segoe UI', 16, 'bold'),    # 任务名称
-            'task_info': ('Segoe UI', 12),             # 任务详情
-            'hotkey': ('Segoe UI', 14, 'bold'),        # 快捷键编号
-            'status': ('Segoe UI', 10, 'bold'),        # 状态信息
-            'timestamp': ('Segoe UI', 9),              # 时间戳
-            'instruction': ('Segoe UI', 10),           # 操作说明
+            'task_title': ('Segoe UI', 12, 'bold'),    # 任务名称
+            'task_info': ('Segoe UI', 10),             # 任务详情
+            'hotkey': ('Segoe UI', 11, 'bold'),        # 快捷键编号
+            'status': ('Segoe UI', 9, 'bold'),         # 状态信息
+            'timestamp': ('Segoe UI', 8),              # 时间戳
+            'instruction': ('Segoe UI', 9),            # 操作说明
         }
         
         # 颜色配置
@@ -75,6 +83,94 @@ class TaskSwitcherDialog:
         self.on_dialog_closed: Optional[Callable] = None
         
         print("✓ 任务切换器对话框初始化完成")
+    
+    def _calculate_window_size(self, task_count: int) -> Tuple[int, int]:
+        """根据任务数量计算窗口尺寸
+        
+        Args:
+            task_count: 任务数量
+            
+        Returns:
+            (width, height) 窗口尺寸
+        """
+        # 基础尺寸
+        base_width = 400
+        base_height = 80   # 标题 + 分隔线 + 底部说明的基础高度
+        
+        # 每个任务行的高度（包括间距）
+        task_row_height = 25  # 进一步减小行高
+        
+        # 根据任务数量计算高度
+        tasks_height = task_count * task_row_height
+        
+        # 总高度 = 基础高度 + 任务行高度
+        total_height = base_height + tasks_height
+        
+        # 设置最小和最大尺寸
+        min_width, min_height = 350, 100
+        max_width, max_height = 600, 400
+        
+        width = max(min_width, min(max_width, base_width))
+        height = max(min_height, min(max_height, total_height))
+        
+        print(f"📏 窗口尺寸计算: {task_count}个任务 -> {width}x{height}")
+        return (width, height)
+    
+    def _show_no_tasks_message(self):
+        """显示没有任务时的提示信息"""
+        try:
+            # 创建简单的提示布局
+            layout = [
+                [sg.Text("📝 还没有任何任务", font=('Segoe UI', 13, 'bold'), 
+                        text_color='#FFFFFF', justification='center')],
+                [sg.Text("")],  # 空行
+                [sg.Text("请先在主窗口中点击 ＋ 添加任务", font=('Segoe UI', 10), 
+                        text_color='#CCCCCC', justification='center')],
+                [sg.Text("")],  # 空行
+                [sg.Text("5秒内不会再次显示此提示", font=('Segoe UI', 8), 
+                        text_color='#888888', justification='center')]
+            ]
+            
+            # 计算提示窗口位置（屏幕中央）
+            screen_info = self.screen_helper.get_screen_metrics()
+            window_width, window_height = 300, 120
+            window_x = screen_info['width'] // 2 - window_width // 2
+            window_y = screen_info['height'] // 2 - window_height // 2
+            
+            # 创建提示窗口
+            hint_window = sg.Window(
+                "任务切换器 - 提示",
+                layout,
+                keep_on_top=True,
+                no_titlebar=True,
+                modal=False,
+                finalize=True,
+                resizable=False,
+                size=(window_width, window_height),
+                location=(window_x, window_y),
+                alpha_channel=0.95,
+                margins=(15, 15),
+                element_padding=(5, 5),
+                background_color='#2D2D2D',
+                auto_close=True,
+                auto_close_duration=2  # 2秒后自动关闭
+            )
+            
+            print("💡 显示无任务提示窗口")
+            
+            # 简单的事件循环，或者等待自动关闭
+            start_time = time.time()
+            while time.time() - start_time < 2.5:  # 最多等待2.5秒
+                event, values = hint_window.read(timeout=100)
+                if event in (sg.WIN_CLOSED, sg.TIMEOUT_EVENT):
+                    break
+            
+            hint_window.close()
+            
+        except Exception as e:
+            print(f"显示提示信息失败: {e}")
+            # 备用方案：只在控制台输出
+            print("💡 提示: 请先在主窗口添加任务，然后使用 Ctrl+Alt+空格 切换")
     
     def show(self) -> bool:
         """显示任务切换器对话框
@@ -88,6 +184,13 @@ class TaskSwitcherDialog:
                 print("任务切换器功能已禁用")
                 return False
             
+            # 检查显示冷却时间，防止重复触发
+            current_time = time.time()
+            if current_time - self.last_show_time < self.show_cooldown:
+                remaining_cooldown = self.show_cooldown - (current_time - self.last_show_time)
+                print(f"任务切换器在冷却期内，剩余 {remaining_cooldown:.1f} 秒")
+                return False
+            
             # 防止重复打开，如果已经显示则重置定时器（线程安全检查）
             if self.is_showing:
                 print("任务切换器已在显示中，重置定时器")
@@ -96,15 +199,30 @@ class TaskSwitcherDialog:
             
             self.is_showing = True
             
+            # 更新显示时间
+            self.last_show_time = current_time
+            
             # 获取当前任务列表
             self.tasks = self.task_manager.get_all_tasks()
             
             if not self.tasks:
                 print("没有可切换的任务")
+                # 检查冷却时间，避免重复显示提示
+                current_time = time.time()
+                if current_time - self.last_hint_time > self.hint_cooldown:
+                    print("显示无任务提示（在冷却期外）")
+                    self._show_no_tasks_message()
+                    self.last_hint_time = current_time
+                else:
+                    remaining_cooldown = self.hint_cooldown - (current_time - self.last_hint_time)
+                    print(f"无任务提示在冷却期内，剩余 {remaining_cooldown:.1f} 秒")
                 return False
             
+            # 根据任务数量动态计算窗口尺寸
+            dynamic_window_size = self._calculate_window_size(len(self.tasks))
+            
             # 计算窗口显示位置
-            window_position = self.screen_helper.get_optimal_window_position(self.window_size)
+            window_position = self.screen_helper.get_optimal_window_position(dynamic_window_size)
             
             # 创建窗口布局
             layout = self._create_layout()
@@ -118,11 +236,11 @@ class TaskSwitcherDialog:
                 modal=False,  # 修复：改为非模态避免事件阻塞
                 finalize=True,
                 resizable=False,
-                size=self.window_size,
+                size=dynamic_window_size,
                 location=window_position,
                 alpha_channel=0.95,
-                margins=(15, 15),
-                element_padding=(5, 5),
+                margins=(8, 8),        # 减小边距
+                element_padding=(3, 3), # 减小元素间距
                 background_color=self.colors['background'],
                 return_keyboard_events=True,
                 use_default_focus=False,
@@ -157,40 +275,34 @@ class TaskSwitcherDialog:
         # 标题行
         title_row = [
             sg.Text("任务切换器", font=self.fonts['task_title'], 
-                   text_color=self.colors['text'], pad=(0, 10))
+                   text_color=self.colors['text'], pad=(0, 5))  # 减小间距
         ]
         layout.append(title_row)
         
         # 分隔线
         layout.append([sg.HorizontalSeparator()])
         
-        # 任务列表区域
+        # 任务列表区域 - 只显示实际存在的任务
         task_list_column = []
         
-        for i in range(9):  # 9个任务槽位
-            if i < len(self.tasks):
-                task = self.tasks[i]
-                task_row = self._create_task_row(i, task)
-            elif self.show_empty_slots:
-                task_row = self._create_empty_task_row(i)
-            else:
-                continue  # 不显示空槽位
-            
+        for i in range(len(self.tasks)):  # 只显示实际任务数量
+            task = self.tasks[i]
+            task_row = self._create_task_row(i, task)
             task_list_column.append(task_row)
             
-            # 添加行间距（除了最后一行）
-            if i < 8:
-                task_list_column.append([sg.Text("", size=(1, 1))])
+            # 添加行间距（除了最后一行） - 缩小间距
+            if i < len(self.tasks) - 1:
+                task_list_column.append([sg.Text("", size=(1, 0))])
         
-        # 将任务列表放在可滚动的列中
+        # 将任务列表放在紧凑的列中
         layout.append([
             sg.Column(
                 task_list_column,
                 expand_x=True,
-                expand_y=True,
+                expand_y=False,  # 不强制垂直展开
                 scrollable=False,
                 background_color=self.colors['background'],
-                pad=(0, 10)
+                pad=(0, 5)  # 减小间距
             )
         ])
         
@@ -202,7 +314,7 @@ class TaskSwitcherDialog:
             sg.Text("↑↓ 选择 | 回车确认 | ESC取消 | 2秒后自动切换", 
                    font=self.fonts['instruction'], 
                    text_color=self.colors['text_secondary'],
-                   justification='center', expand_x=True, pad=(0, 10))
+                   justification='center', expand_x=True, pad=(0, 5))  # 减小间距
         ]
         layout.append(instruction_row)
         
@@ -230,7 +342,7 @@ class TaskSwitcherDialog:
             f"[{index + 1}]",
             font=self.fonts['hotkey'],
             text_color=hotkey_color,
-            size=(4, 1),
+            size=(3, 1),  # 缩小编号宽度
             key=f"-HOTKEY-{index}-",
             background_color=bg_color
         )
@@ -241,7 +353,7 @@ class TaskSwitcherDialog:
             display_name,
             font=self.fonts['task_title'],
             text_color=text_color,
-            size=(35, 1),  # 增加宽度以适应简化界面
+            size=(25, 1),  # 减小宽度适配小界面
             key=f"-TASK_NAME-{index}-",
             background_color=bg_color
         )
@@ -257,7 +369,7 @@ class TaskSwitcherDialog:
             key=f"-TASK_ROW-{index}-",
             expand_x=True,
             element_justification='left',
-            pad=(8, 6),  # 适中的间距
+            pad=(4, 1),  # 进一步减小垂直间距
             relief=sg.RELIEF_RAISED if is_selected else sg.RELIEF_FLAT
         )]
     
