@@ -16,7 +16,8 @@
       "WebFetch(domain:freesimplegui.readthedocs.io)",
       "Bash(git add:*)",
       "Bash(git config:*)",
-      "Bash(git commit:*)"
+      "Bash(git commit:*)",
+      "Bash(find:*)"
     ],
     "deny": []
   }

@@ -151,7 +151,7 @@ class ModernUIConfig:
             text,
             key=key,
             button_color=color,
-            font=cls.FONTS['button'] if size != (2, 1) else ('Segoe UI', 10),  # 正方形按钮使用稍大字体
+            font=cls.FONTS['button'] if size != (2, 1) else ('Segoe UI', 9),  # 正方形按钮使用正常字体避免偏移
             size=size,
             border_width=0,
             focus=False,

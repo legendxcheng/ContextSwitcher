@@ -60,6 +60,7 @@ class ContextSwitcher:
         self.data_storage = None
         self.smart_rebind_manager = None
         self.task_status_manager = None
+        self.task_switcher = None  # 新增：任务切换器
         
         # 运行状态
         self.running = False
@@ -107,6 +108,11 @@ class ContextSwitcher:
             self.main_window.on_window_closed = self.cleanup
             print("  ✓ 主窗口")
             
+            # 初始化任务切换器
+            from gui.task_switcher_dialog import TaskSwitcherDialog
+            self.task_switcher = TaskSwitcherDialog(self.task_manager)
+            print("  ✓ 任务切换器")
+            
             print("✓ 组件初始化完成")
             return True
             
@@ -144,6 +150,19 @@ class ContextSwitcher:
     def register_hotkeys(self):
         """注册全局热键"""
         try:
+            # 设置主窗口引用到热键管理器（用于线程安全通信）
+            if self.main_window and self.main_window.window:
+                self.hotkey_manager.set_main_window(self.main_window.window)
+                print("✓ 热键管理器已连接到主窗口")
+            else:
+                print("⚠️ 主窗口未创建，使用备用回调方案")
+                # 设置切换器回调作为备用方案
+                self.hotkey_manager.on_switcher_triggered = self.show_task_switcher
+            
+            # 设置主窗口的热键回调
+            if self.main_window:
+                self.main_window.on_hotkey_switcher_triggered = self.show_task_switcher
+            
             # 启动热键监听器
             success = self.hotkey_manager.start()
             
@@ -158,6 +177,23 @@ class ContextSwitcher:
             print(f"✗ 热键注册失败: {e}")
             return False
     
+    def show_task_switcher(self):
+        """显示任务切换器"""
+        try:
+            if self.task_switcher:
+                print("🎯 热键触发任务切换器...")
+                result = self.task_switcher.show()
+                if result:
+                    print("✅ 任务切换器执行成功")
+                else:
+                    print("🔄 任务切换器已显示或用户取消")
+            else:
+                print("⚠️ 任务切换器未初始化")
+        except Exception as e:
+            print(f"显示任务切换器失败: {e}")
+            import traceback
+            traceback.print_exc()
+    
     def run(self):
         """运行主程序"""
         try:
@@ -169,12 +205,15 @@ class ContextSwitcher:
             if not self.load_data():
                 print("警告: 数据加载失败，将使用空数据启动")
             
-            # 注册热键
+            # 显示主窗口（创建窗口实例）
+            print("启动主界面...")
+            self.main_window.show()
+            
+            # 在主窗口创建后注册热键（确保window对象存在）
             if not self.register_hotkeys():
                 print("警告: 热键注册失败，只能使用GUI操作")
             
-            # 启动主GUI
-            print("启动主界面...")
+            # 运行主GUI事件循环
             self.running = True
             self.main_window.run()
             
@@ -230,6 +269,11 @@ class ContextSwitcher:
         """清理资源"""
         try:
             self.running = False
+            
+            # 清理任务切换器
+            if self.task_switcher:
+                self.task_switcher._cleanup()
+                print("✓ 任务切换器已清理")
             
             # 注销热键
             if self.hotkey_manager:

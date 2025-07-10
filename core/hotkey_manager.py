@@ -44,63 +44,69 @@ class HotkeyManager:
         self.listener: Optional[Listener] = None
         self.running = False
         
-        # 热键状态跟踪
+        # 热键状态跟踪（线程安全：只在pynput子线程中访问）
         self.pressed_keys = set()
         self.hotkey_combinations = {}
         self.last_hotkey_time = 0
         self.hotkey_debounce = 0.2  # 防抖间隔（秒）
         
-        # 切换状态管理
-        self._switching_lock = threading.Lock()
-        self._is_switching = False
-        self._last_switch_key = None
-        
         # 回调函数
-        self.on_hotkey_pressed: Optional[Callable[[str, int], None]] = None
         self.on_hotkey_error: Optional[Callable[[str], None]] = None
+        self.on_switcher_triggered: Optional[Callable] = None  # 切换器触发回调
+        
+        # 线程安全通信
+        self.main_window: Optional[Any] = None  # 主窗口引用（用于write_event_value）
         
         # 初始化热键组合
         self._initialize_hotkey_combinations()
         
         print("✓ 热键管理器初始化完成")
     
+    def set_main_window(self, main_window):
+        """设置主窗口引用，用于线程安全的事件通信
+        
+        Args:
+            main_window: 主窗口实例（具有write_event_value方法）
+        """
+        self.main_window = main_window
+        print("✓ 热键管理器已设置主窗口引用")
+    
     def _initialize_hotkey_combinations(self):
-        """初始化热键组合"""
-        # 从配置读取修饰键和数字键
-        modifiers = self.hotkey_config.get("modifiers", ["ctrl", "alt"])
-        keys = self.hotkey_config.get("keys", ["1", "2", "3", "4", "5", "6", "7", "8", "9"])
+        """初始化热键组合 - 仅支持任务切换器热键"""
+        # 仅初始化任务切换器热键（移除数字键支持）
+        switcher_modifiers = self.hotkey_config.get("switcher_modifiers", ["ctrl", "alt"])
+        switcher_key = self.hotkey_config.get("switcher_key", "space")
         
-        # 转换修饰键
-        modifier_keys = set()
-        for mod in modifiers:
-            if mod.lower() == "ctrl":
-                modifier_keys.add(Key.ctrl_l)
-                modifier_keys.add(Key.ctrl_r)
-            elif mod.lower() == "alt":
-                modifier_keys.add(Key.alt_l)
-                modifier_keys.add(Key.alt_r)
-            elif mod.lower() == "shift":
-                modifier_keys.add(Key.shift_l)
-                modifier_keys.add(Key.shift_r)
-            elif mod.lower() == "win":
-                modifier_keys.add(Key.cmd)
-        
-        # 创建热键组合
-        for i, key in enumerate(keys):
-            if i >= 9:  # 最多支持9个热键
-                break
+        if self.hotkey_config.get("switcher_enabled", True):
+            switcher_modifier_keys = set()
+            for mod in switcher_modifiers:
+                if mod.lower() == "ctrl":
+                    switcher_modifier_keys.add(Key.ctrl_l)
+                    switcher_modifier_keys.add(Key.ctrl_r)
+                elif mod.lower() == "alt":
+                    switcher_modifier_keys.add(Key.alt_l)
+                    switcher_modifier_keys.add(Key.alt_r)
+                elif mod.lower() == "shift":
+                    switcher_modifier_keys.add(Key.shift_l)
+                    switcher_modifier_keys.add(Key.shift_r)
+                elif mod.lower() == "win":
+                    switcher_modifier_keys.add(Key.cmd)
             
-            # 创建热键组合描述
-            hotkey_name = "+".join(modifiers + [key])
+            # 创建切换器热键组合
+            switcher_hotkey_name = "+".join(switcher_modifiers + [switcher_key])
             
-            self.hotkey_combinations[hotkey_name] = {
-                "modifiers": modifier_keys.copy(),
-                "key": KeyCode.from_char(key),
-                "task_index": i,
-                "description": f"切换到任务 {i+1}"
+            self.hotkey_combinations[switcher_hotkey_name] = {
+                "modifiers": switcher_modifier_keys,
+                "key": Key.space if switcher_key.lower() == "space" else KeyCode.from_char(switcher_key),
+                "description": "打开任务切换器",
+                "type": "switcher"
             }
+            
+            print(f"✓ 已配置任务切换器热键: {switcher_hotkey_name}")
+        else:
+            print("⚠️ 任务切换器热键已禁用")
         
-        print(f"✓ 已配置 {len(self.hotkey_combinations)} 个热键组合")
+        print(f"✓ 热键配置完成，共 {len(self.hotkey_combinations)} 个热键组合")
     
     def start(self) -> bool:
         """启动热键监听
@@ -198,17 +204,12 @@ class HotkeyManager:
         if current_time - self.last_hotkey_time < self.hotkey_debounce:
             return
         
-        # 调试信息：只在有修饰键时显示
-        if len(self.pressed_keys) >= 3:  # Ctrl + Alt + 数字键
-            key_names = [str(key) for key in self.pressed_keys]
-            print(f"🔍 当前按下的键: {', '.join(key_names)}")
         
         for hotkey_name, hotkey_info in self.hotkey_combinations.items():
             if self._is_hotkey_pressed(hotkey_info):
                 # 记录热键触发时间
                 self.last_hotkey_time = current_time
                 
-                print(f"🎯 热键匹配: {hotkey_name}")
                 
                 # 处理热键
                 self._handle_hotkey(hotkey_name, hotkey_info)
@@ -218,92 +219,110 @@ class HotkeyManager:
         """检查指定热键是否被按下"""
         required_modifiers = hotkey_info["modifiers"]
         required_key = hotkey_info["key"]
+        hotkey_type = hotkey_info.get("type", "task_switch")
         
-        # 检查是否至少有一个Ctrl和一个Alt键被按下
-        ctrl_pressed = Key.ctrl_l in self.pressed_keys or Key.ctrl_r in self.pressed_keys
-        alt_pressed = Key.alt_l in self.pressed_keys or Key.alt_r in self.pressed_keys
-        
-        # Ctrl+Alt组合需要两个修饰键都被按下
-        if not (ctrl_pressed and alt_pressed):
+        # 检查修饰键是否匹配
+        modifiers_matched = self._check_modifiers(required_modifiers)
+        if not modifiers_matched:
             return False
         
-        # 检查目标键 - 数字键匹配
-        target_key_found = False
+        # 检查目标键匹配
+        return self._check_target_key(required_key, hotkey_type)
+    
+    def _check_modifiers(self, required_modifiers: set) -> bool:
+        """检查修饰键是否匹配"""
+        # 检查Ctrl键
+        ctrl_required = Key.ctrl_l in required_modifiers or Key.ctrl_r in required_modifiers
+        ctrl_pressed = Key.ctrl_l in self.pressed_keys or Key.ctrl_r in self.pressed_keys
         
-        # 获取期望的字符
+        # 检查Alt键
+        alt_required = Key.alt_l in required_modifiers or Key.alt_r in required_modifiers
+        alt_pressed = Key.alt_l in self.pressed_keys or Key.alt_r in self.pressed_keys
+        
+        # 检查Shift键
+        shift_required = Key.shift_l in required_modifiers or Key.shift_r in required_modifiers
+        shift_pressed = Key.shift_l in self.pressed_keys or Key.shift_r in self.pressed_keys
+        
+        # 检查Win键
+        win_required = Key.cmd in required_modifiers
+        win_pressed = Key.cmd in self.pressed_keys
+        
+        # 所有需要的修饰键必须被按下
+        if ctrl_required and not ctrl_pressed:
+            return False
+        if alt_required and not alt_pressed:
+            return False
+        if shift_required and not shift_pressed:
+            return False
+        if win_required and not win_pressed:
+            return False
+        
+        return True
+    
+    def _check_target_key(self, required_key, hotkey_type: str) -> bool:
+        """检查目标键是否匹配"""
+        # 处理空格键
+        if required_key == Key.space:
+            return Key.space in self.pressed_keys
+        
+        # 处理字符键（数字键等）
         if hasattr(required_key, 'char') and required_key.char:
             target_char = required_key.char
             target_ascii = ord(target_char)
             
-            # 检查当前按下的键中是否有匹配的数字键
+            # 检查当前按下的键中是否有匹配的键
             for pressed_key in self.pressed_keys:
                 # 方法1: 直接字符匹配
                 if hasattr(pressed_key, 'char') and pressed_key.char == target_char:
-                    target_key_found = True
-                    break
+                    return True
                 # 方法2: ASCII码匹配 (处理 <49>, <50> 等情况)
                 elif hasattr(pressed_key, 'vk') and pressed_key.vk == target_ascii:
-                    target_key_found = True
-                    break
+                    return True
                 # 方法3: 字符串表示匹配 (处理 KeyCode 对象)
                 elif str(pressed_key) == str(required_key):
-                    target_key_found = True
-                    break
-            
-            # 调试信息
-            if not target_key_found:
-                print(f"❌ 目标键 '{target_char}' (ASCII:{target_ascii}) 未找到")
-            else:
-                print(f"✅ 目标键 '{target_char}' 找到")
+                    return True
         
-        return target_key_found
+        # 处理特殊键
+        return required_key in self.pressed_keys
     
     def _handle_hotkey(self, hotkey_name: str, hotkey_info: Dict[str, Any]):
-        """处理热键触发（支持并发切换中止）"""
+        """处理热键触发 - 使用线程安全的事件通信"""
         try:
-            task_index = hotkey_info["task_index"]
+            hotkey_type = hotkey_info.get("type", "switcher")
             
-            # 使用锁确保同时只有一个切换请求被处理
-            with self._switching_lock:
-                # 检查是否是重复的热键
-                if self._last_switch_key == hotkey_name:
-                    print(f"⚠️ 忽略重复热键: {hotkey_name}")
-                    return
+            if hotkey_type == "switcher":
+                # 处理任务切换器热键
+                print(f"✨ 任务切换器热键触发: {hotkey_name}")
                 
-                print(f"热键触发: {hotkey_name} -> 任务 {task_index + 1}")
-                
-                # 如果当前有切换在进行，这个新请求会自动中止旧的切换
-                if self._is_switching:
-                    print(f"⚠️ 中止当前切换，开始新的切换到任务 {task_index + 1}")
-                
-                # 标记正在切换
-                self._is_switching = True
-                self._last_switch_key = hotkey_name
-            
-            # 在锁外执行切换（避免阻塞其他热键）
-            try:
-                # 切换到指定任务（TaskManager会自动处理中止逻辑）
-                success = self.task_manager.switch_to_task(task_index)
-                
-                if not success:
-                    print(f"切换到任务 {task_index + 1} 失败")
-                
-                # 触发回调
-                if self.on_hotkey_pressed:
-                    self.on_hotkey_pressed(hotkey_name, task_index)
-                    
-            finally:
-                # 重置切换状态
-                with self._switching_lock:
-                    self._is_switching = False
-                    self._last_switch_key = None
+                # 线程安全方式：通过write_event_value发送事件到主线程
+                if self.main_window and hasattr(self.main_window, 'write_event_value'):
+                    try:
+                        self.main_window.write_event_value('-HOTKEY_TRIGGERED-', hotkey_name)
+                        print("✓ 热键事件已发送到主线程")
+                    except Exception as e:
+                        print(f"发送热键事件失败: {e}")
+                        # 线程安全的错误传递
+                        if self.main_window and hasattr(self.main_window, 'write_event_value'):
+                            try:
+                                self.main_window.write_event_value('-HOTKEY_ERROR-', f"热键事件发送失败: {e}")
+                            except:
+                                pass  # 避免递归错误
+                        # 备用方案：使用原有回调（但不安全）
+                        if self.on_switcher_triggered:
+                            print("⚠️ 使用备用回调方案（可能不安全）")
+                            self.on_switcher_triggered()
+                else:
+                    # 备用方案：使用原有回调（但可能不安全）
+                    print("⚠️ 主窗口未设置，使用备用回调方案")
+                    if self.on_switcher_triggered:
+                        self.on_switcher_triggered()
+                    else:
+                        print("⚠️ 切换器回调未设置")
+            else:
+                print(f"⚠️ 未知的热键类型: {hotkey_type}")
                 
         except Exception as e:
             print(f"处理热键失败: {e}")
-            # 确保异常时也重置状态
-            with self._switching_lock:
-                self._is_switching = False
-                self._last_switch_key = None
             
             if self.on_hotkey_error:
                 self.on_hotkey_error(f"处理热键失败: {e}")

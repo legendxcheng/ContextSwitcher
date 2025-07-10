@@ -22,6 +22,7 @@ def simple_hotkey_test():
         print("✅ pynput已成功导入")
         
         # 跟踪按键状态
+        
         pressed_keys = set()
         hotkey_detected = False
         

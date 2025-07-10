@@ -39,9 +39,9 @@ class Config:
                 "remember_position": True
             },
             "hotkeys": {
-                "enabled": True,
-                "modifiers": ["ctrl", "alt"],
-                "keys": ["1", "2", "3", "4", "5", "6", "7", "8", "9"]
+                "switcher_enabled": True,
+                "switcher_modifiers": ["ctrl", "alt"],
+                "switcher_key": "space"
             },
             "data": {
                 "auto_save": True,
@@ -59,6 +59,13 @@ class Config:
                 "toast_cooldown_minutes": 30,  # Toast通知冷却时间（分钟）
                 "check_interval_seconds": 60,  # 检查间隔（秒）
                 "show_idle_time_column": True  # 显示待机时间列
+            },
+            "task_switcher": {
+                "enabled": True,
+                "window_size": [800, 700],
+                "auto_close_delay": 2.0,
+                "show_hotkey_hints": True,
+                "show_empty_slots": True
             }
         }
         
@@ -192,6 +199,10 @@ class Config:
     def get_monitoring_config(self) -> Dict[str, Any]:
         """获取监控配置"""
         return self.get('monitoring', {})
+    
+    def get_task_switcher_config(self) -> Dict[str, Any]:
+        """获取任务切换器配置"""
+        return self.get('task_switcher', {})
     
     def update_window_position(self, x: int, y: int, width: int, height: int) -> bool:
         """更新窗口位置和大小"""
