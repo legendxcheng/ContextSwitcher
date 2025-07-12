@@ -29,9 +29,10 @@ from gui.event_controller import EventController, IWindowActions
 from gui.window_state_manager import WindowStateManager, IWindowProvider
 from gui.notification_controller import NotificationController, INotificationProvider
 from gui.ui_layout_manager import UILayoutManager, ILayoutProvider
+from gui.action_dispatcher import ActionDispatcher, IActionProvider
 
 
-class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayoutProvider):
+class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayoutProvider, IActionProvider):
     """主窗口类"""
     
     def __init__(self, task_manager: TaskManager):
@@ -69,17 +70,15 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         # UI布局管理器
         self.ui_layout_manager: UILayoutManager = UILayoutManager(self)
         
+        # 业务动作调度器
+        self.action_dispatcher: ActionDispatcher = ActionDispatcher(self)
+        
         # 状态
         self.running = False
         self.refresh_timer = None
         self.last_refresh = 0
         self.refresh_interval = 2.0  # 秒
         
-        # 表格选中状态保存
-        self.preserved_selection = None
-        
-        # 状态消息清除时间
-        self.status_clear_time = 0
         
         
         # 事件回调
@@ -117,7 +116,7 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
             self.window = self.create_window()
         
         self.running = True
-        self._update_display()
+        self.action_dispatcher.update_display()
         
         # 初始化通知控制器
         self.notification_controller.initialize()
@@ -129,11 +128,8 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         # 初始化事件控制器
         self.event_controller = EventController(self.task_manager, self)
         
-        # 设置任务管理器回调
-        self.task_manager.on_task_added = self._on_task_changed
-        self.task_manager.on_task_removed = self._on_task_changed
-        self.task_manager.on_task_updated = self._on_task_changed
-        self.task_manager.on_task_switched = self._on_task_switched
+        # 设置任务管理器回调（通过ActionDispatcher）
+        self.action_dispatcher.setup_task_manager_callbacks()
         
         print("✓ 主窗口已显示")
     
@@ -166,11 +162,11 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
     # IWindowActions接口实现
     def update_display(self):
         """更新显示 - IWindowActions接口实现"""
-        self._update_display()
+        self.action_dispatcher.update_display()
     
     def set_status(self, message: str, duration_ms: int = 0):
         """设置状态消息 - IWindowActions接口实现"""
-        self._set_status(message, duration_ms)
+        self.action_dispatcher.set_status(message, duration_ms)
     
     def get_window(self):
         """获取窗口对象 - IWindowActions和IWindowProvider接口实现"""
@@ -187,6 +183,18 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
     def get_window_state_manager(self):
         """获取窗口状态管理器 - ILayoutProvider接口实现"""
         return self.window_state_manager
+    
+    def get_data_provider(self):
+        """获取数据提供器 - IActionProvider接口实现"""
+        return self.data_provider
+    
+    def get_event_controller(self):
+        """获取事件控制器 - IActionProvider接口实现"""
+        return self.event_controller
+    
+    def is_running(self) -> bool:
+        """检查是否正在运行 - IActionProvider接口实现"""
+        return self.running
     
     def run(self):
         """运行主事件循环"""
@@ -227,7 +235,7 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
                 # 定期刷新显示
                 current_time = time.time()
                 if current_time - self.last_refresh > self.refresh_interval:
-                    self._update_display()
+                    self.action_dispatcher.update_display()
                     self.last_refresh = current_time
                 
                 # 定期监控待机时间
@@ -235,13 +243,7 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
                     self.notification_controller.check_idle_tasks()
                 
                 # 检查状态消息是否需要清除
-                if self.status_clear_time > 0 and current_time >= self.status_clear_time:
-                    try:
-                        self.window["-MAIN_STATUS-"].update("就绪")
-                        self.status_clear_time = 0  # 重置清除时间
-                    except Exception as e:
-                        print(f"清除状态失败: {e}")
-                        self.status_clear_time = 0
+                self.action_dispatcher.check_status_clear(current_time)
                 
             except Exception as e:
                 print(f"GUI事件处理错误: {e}")
@@ -250,94 +252,4 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         print("GUI事件循环结束")
         self.close()
     
-    def _update_display(self):
-        """更新显示内容"""
-        if not self.window or not self.running:
-            return
-        
-        try:
-            # 确定要使用的选中状态（优先使用事件控制器中保存的状态）
-            selection_to_restore = None
-            if self.event_controller:
-                selection_to_restore = self.event_controller.get_preserved_selection()
-            
-            # 备用：使用MainWindow的preserved_selection
-            if selection_to_restore is None:
-                selection_to_restore = self.preserved_selection
-            
-            # 如果没有保存的状态，尝试获取当前选中状态
-            if selection_to_restore is None:
-                try:
-                    table_widget = self.window["-TASK_TABLE-"]
-                    if hasattr(table_widget, 'SelectedRows') and table_widget.SelectedRows:
-                        selection_to_restore = table_widget.SelectedRows[0]
-                except Exception as e:
-                    print(f"⚠️ 获取选中状态失败: {e}")
-            
-            # 更新任务表格和行颜色
-            table_data = self.data_provider.get_table_data()
-            row_colors = self.data_provider.get_row_colors()
-            
-            # 应用行颜色配置
-            
-            # 更新表格数据和行颜色
-            self.window["-TASK_TABLE-"].update(values=table_data, row_colors=row_colors)
-            
-            # 恢复选中状态
-            if selection_to_restore is not None and selection_to_restore < len(table_data):
-                try:
-                    self.window["-TASK_TABLE-"].update(select_rows=[selection_to_restore])
-                except Exception as e:
-                    print(f"⚠️ 恢复选中状态失败: {e}")
-            
-            # 更新状态
-            task_count = len(self.task_manager.get_all_tasks())
-            current_task = self.task_manager.get_current_task()
-            
-            if current_task:
-                status = f"当前: {current_task.name}"
-            else:
-                status = f"{task_count} 个任务"
-            
-            self.window["-STATUS-"].update(status)
-            self.window["-MAIN_STATUS-"].update("就绪")
-            
-        except Exception as e:
-            print(f"更新显示失败: {e}")
-    
-    
-    def _set_status(self, message: str, duration_ms: int = 0):
-        """设置状态消息
-        
-        Args:
-            message: 状态消息
-            duration_ms: 显示时长（毫秒），0表示永久显示
-        """
-        if not self.window:
-            return
-        
-        try:
-            self.window["-MAIN_STATUS-"].update(message)
-            
-            if duration_ms > 0:
-                # 记录状态清除时间，让主事件循环处理
-                self.status_clear_time = time.time() + (duration_ms / 1000.0)
-                
-        except Exception as e:
-            print(f"设置状态失败: {e}")
-    
-    def _on_task_changed(self, task: Task):
-        """任务变化回调"""
-        if self.running:
-            # 任务发生变化时，清除保存的选中状态以避免索引错位
-            self.preserved_selection = None
-            if self.event_controller:
-                self.event_controller.set_preserved_selection(None)
-            self._update_display()
-    
-    def _on_task_switched(self, task: Task, index: int):
-        """任务切换回调"""
-        if self.running:
-            self._update_display()
-            self._set_status(f"已切换到: {task.name}", 3000)
     
