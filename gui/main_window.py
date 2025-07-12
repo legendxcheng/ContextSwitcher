@@ -24,6 +24,7 @@ except ImportError:
 from core.task_manager import TaskManager, Task, TaskStatus
 from utils.config import get_config
 from gui.modern_config import ModernUIConfig
+from gui.table_data_provider import TableDataProvider, IDataProvider
 
 
 class MainWindow:
@@ -48,6 +49,9 @@ class MainWindow:
         # GUI组件
         self.window: Optional[sg.Window] = None
         self.table_widget = None
+        
+        # 数据提供器
+        self.data_provider: IDataProvider = TableDataProvider(task_manager)
         
         # 状态
         self.running = False
@@ -80,6 +84,10 @@ class MainWindow:
         
         # 创建窗口布局
         self.layout = self._create_layout()
+        
+        # 设置数据提供器的状态管理器引用（延迟设置）
+        if hasattr(self.data_provider, 'set_task_status_manager'):
+            self.data_provider.set_task_status_manager(self.task_status_manager)
         
         print("✓ 主窗口初始化完成")
     
@@ -186,6 +194,10 @@ class MainWindow:
         
         # 初始化Toast管理器
         self._initialize_toast_manager()
+        
+        # 更新数据提供器的状态管理器引用
+        if hasattr(self.data_provider, 'set_task_status_manager'):
+            self.data_provider.set_task_status_manager(self.task_status_manager)
         
         # 设置任务管理器回调
         self.task_manager.on_task_added = self._on_task_changed
@@ -332,13 +344,12 @@ class MainWindow:
                     table_widget = self.window["-TASK_TABLE-"]
                     if hasattr(table_widget, 'SelectedRows') and table_widget.SelectedRows:
                         selection_to_restore = table_widget.SelectedRows[0]
-                        print(f"💾 检测到当前选中状态: 行 {selection_to_restore}")
                 except Exception as e:
                     print(f"⚠️ 获取选中状态失败: {e}")
             
             # 更新任务表格和行颜色
-            table_data = self._get_table_data()
-            row_colors = self._get_row_colors()
+            table_data = self.data_provider.get_table_data()
+            row_colors = self.data_provider.get_row_colors()
             
             # 应用行颜色配置
             
@@ -349,7 +360,6 @@ class MainWindow:
             if selection_to_restore is not None and selection_to_restore < len(table_data):
                 try:
                     self.window["-TASK_TABLE-"].update(select_rows=[selection_to_restore])
-                    print(f"🔄 恢复选中状态: 行 {selection_to_restore}")
                 except Exception as e:
                     print(f"⚠️ 恢复选中状态失败: {e}")
             
@@ -368,82 +378,6 @@ class MainWindow:
         except Exception as e:
             print(f"更新显示失败: {e}")
     
-    def _get_table_data(self) -> List[List[str]]:
-        """获取表格数据"""
-        table_data = []
-        tasks = self.task_manager.get_all_tasks()
-        current_index = self.task_manager.current_task_index
-        
-        for i, task in enumerate(tasks):
-            # 任务编号（带当前任务标记）
-            task_num = f"►{i+1}" if i == current_index else str(i+1)
-            
-            # 任务名称 - 适配调整后的列宽
-            task_name = task.name
-            if len(task_name) > 15:
-                task_name = task_name[:13] + ".."
-            
-            # 绑定窗口数量 - 紧凑显示
-            valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
-            total_windows = len(task.bound_windows)
-            
-            if total_windows == 0:
-                windows_info = "-"
-            elif valid_windows == total_windows:
-                windows_info = str(total_windows) if total_windows < 10 else "9+"
-            else:
-                windows_info = f"{valid_windows}/{total_windows}"
-            
-            # 任务状态 - 使用状态管理器的图标
-            if self.task_status_manager:
-                status_icon = self.task_status_manager.get_status_icon(task.status)
-                status = status_icon
-            else:
-                # 备用显示方案
-                if i == current_index:
-                    status = "🟢"  # 活跃 - 绿色圆点
-                elif total_windows > 0 and valid_windows == total_windows:
-                    status = "🔵"  # 就绪 - 蓝色圆点
-                elif valid_windows < total_windows:
-                    status = "🟡"  # 部分有效 - 黄色圆点
-                else:
-                    status = "⚪"  # 空闲 - 白色圆点
-            
-            # 待机时间计算
-            from utils.time_helper import calculate_task_idle_time
-            is_current = (i == current_index)
-            idle_minutes, idle_display, needs_warning = calculate_task_idle_time(task, is_current)
-            
-            # 新的5列格式：编号、任务名、窗口数、状态、待机时间
-            table_data.append([task_num, task_name, windows_info, status, idle_display])
-        
-        return table_data
-    
-    def _get_row_colors(self) -> List[tuple]:
-        """获取表格行颜色配置 - 使用FreeSimpleGUI正确的row_colors格式"""
-        row_colors = []
-        tasks = self.task_manager.get_all_tasks()
-        current_index = self.task_manager.current_task_index
-        
-        # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
-        # 必须为所有行明确设置颜色，否则之前的颜色不会被清除
-        for i, task in enumerate(tasks):
-            # 计算待机时间以确定是否需要警告
-            from utils.time_helper import calculate_task_idle_time
-            is_current = (i == current_index)
-            idle_minutes, idle_display, needs_warning = calculate_task_idle_time(task, is_current)
-            
-            if i == current_index:
-                # 当前任务：绿色高亮
-                row_colors.append((i, '#00DD00', '#2D2D2D'))  # 亮绿色文字, 深灰背景
-            elif needs_warning:
-                # 超时任务：红色警告（仅针对待机时间列）
-                row_colors.append((i, '#FF4444', '#202020'))  # 红色文字, 默认背景
-            else:
-                # 普通任务：恢复默认白色
-                row_colors.append((i, '#FFFFFF', '#202020'))  # 白色文字, 默认背景
-        
-        return row_colors
     
     def _check_drag_state(self):
         """检查窗口是否被拖拽"""
@@ -609,7 +543,6 @@ class MainWindow:
                 task_index = selected_rows[0]
                 # 保存选中状态
                 self.preserved_selection = task_index
-                print(f"📌 用户选择任务: 行 {task_index}")
                 
                 task = self.task_manager.get_task_by_index(task_index)
                 if task:
@@ -617,7 +550,6 @@ class MainWindow:
             else:
                 # 清除选中状态
                 self.preserved_selection = None
-                print("🔹 清除选择状态")
             
         except Exception as e:
             print(f"处理表格选择失败: {e}")
