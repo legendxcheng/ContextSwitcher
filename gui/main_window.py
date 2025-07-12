@@ -28,9 +28,10 @@ from gui.table_data_provider import TableDataProvider, IDataProvider
 from gui.event_controller import EventController, IWindowActions
 from gui.window_state_manager import WindowStateManager, IWindowProvider
 from gui.notification_controller import NotificationController, INotificationProvider
+from gui.ui_layout_manager import UILayoutManager, ILayoutProvider
 
 
-class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
+class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayoutProvider):
     """主窗口类"""
     
     def __init__(self, task_manager: TaskManager):
@@ -65,6 +66,9 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
         # 通知控制器
         self.notification_controller: NotificationController = NotificationController(self)
         
+        # UI布局管理器
+        self.ui_layout_manager: UILayoutManager = UILayoutManager(self)
+        
         # 状态
         self.running = False
         self.refresh_timer = None
@@ -86,7 +90,7 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
         ModernUIConfig.setup_theme()
         
         # 创建窗口布局
-        self.layout = self._create_layout()
+        self.layout = self.ui_layout_manager.create_layout()
         
         # 设置数据提供器的状态管理器引用（延迟设置）
         if hasattr(self.data_provider, 'set_task_status_manager'):
@@ -94,94 +98,16 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
         
         print("✓ 主窗口初始化完成")
     
-    def _create_layout(self) -> List[List[Any]]:
-        """创建现代化Widget布局"""
-        colors = ModernUIConfig.COLORS
-        fonts = ModernUIConfig.FONTS
-        
-        # 状态行 - 保持全局拖拽功能
-        status_row = [
-            sg.Text("", key="-STATUS-", font=fonts['body'], 
-                   text_color=colors['text_secondary']),
-            sg.Push(),
-            sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12), 
-                   text_color=colors['success'], tooltip="就绪"),
-            sg.Button("✕", key="-CLOSE-", size=(1, 1), 
-                     button_color=(colors['text'], colors['error']),
-                     font=("Segoe UI", 10), border_width=0, tooltip="关闭")
-        ]
-        
-        # 现代化任务表格 - 增加待机时间列
-        table_headings = ["#", "任务", "窗口", "状态", "待机时间"]
-        table_data = []
-        
-        # 创建精确控制宽度的表格，增加待机时间列
-        compact_table = ModernUIConfig.create_modern_table(
-            values=table_data,
-            headings=table_headings,
-            key="-TASK_TABLE-",
-            num_rows=5,  # 从4行增加到5行
-            col_widths=[2, 12, 3, 3, 6]  # 调整列宽：[编号, 任务名, 窗口数, 状态, 待机时间]
-        )
-        # 确保表格不会扩展
-        compact_table.expand_x = False
-        compact_table.expand_y = False
-        
-        table_row = [compact_table]
-        
-        # 正方形按钮行
-        button_row = [
-            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (2, 1), "添加任务"),
-            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1), "编辑任务"),
-            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1), "删除任务"),
-            sg.Text("", size=(1, 1)),  # 小分隔符
-            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (2, 1), "刷新"),
-            ModernUIConfig.create_modern_button("⚙", "-SETTINGS-", "warning", (2, 1), "设置")
-        ]
-        
-        # 极简状态行
-        bottom_row = [
-            sg.Text("", key="-MAIN_STATUS-", font=fonts['small'], 
-                   text_color=colors['text_secondary'], size=(8, 1)),
-            sg.Text("C+A+空格", font=fonts['small'], 
-                   text_color=colors['text_disabled'], size=(8, 1))
-        ]
-        
-        # 现代化Widget布局 - 极简设计，使用Column控制整体宽度
-        layout = [
-            [sg.Column([
-                status_row,
-                table_row,
-                button_row,
-                bottom_row
-            ], element_justification='left', 
-               expand_x=False, expand_y=False,
-               pad=(0, 0),  # 无额外padding
-               background_color=colors['background'])]
-        ]
-        
-        return layout
-    
     def create_window(self) -> sg.Window:
         """创建现代化Widget窗口"""
-        # 获取现代化Widget配置
-        window_config = ModernUIConfig.get_widget_window_config()
-        window_config['layout'] = self.layout
+        # 使用UI布局管理器创建窗口
+        window = self.ui_layout_manager.create_window(self.layout)
         
-        # 窗口位置设置，不设置大小让其自适应
-        restored_position = self.window_state_manager.restore_position()
-        if restored_position:
-            window_config["location"] = restored_position
-        # 不设置size参数，让窗口完全自适应内容大小
-        
-        # 创建窗口
-        window = sg.Window(**window_config)
+        # 设置窗口事件绑定
+        window = self.ui_layout_manager.setup_window_events(window)
         
         # 保存表格组件引用
-        self.table_widget = window["-TASK_TABLE-"]
-        
-        # 绑定双击事件
-        self.table_widget.bind('<Double-Button-1>', ' Double')
+        self.table_widget = self.ui_layout_manager.get_table_widget(window)
         
         return window
     
@@ -257,6 +183,10 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
     def get_task_manager(self):
         """获取任务管理器 - INotificationProvider接口实现"""
         return self.task_manager
+    
+    def get_window_state_manager(self):
+        """获取窗口状态管理器 - ILayoutProvider接口实现"""
+        return self.window_state_manager
     
     def run(self):
         """运行主事件循环"""
