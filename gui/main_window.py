@@ -27,9 +27,10 @@ from gui.modern_config import ModernUIConfig
 from gui.table_data_provider import TableDataProvider, IDataProvider
 from gui.event_controller import EventController, IWindowActions
 from gui.window_state_manager import WindowStateManager, IWindowProvider
+from gui.notification_controller import NotificationController, INotificationProvider
 
 
-class MainWindow(IWindowActions, IWindowProvider):
+class MainWindow(IWindowActions, IWindowProvider, INotificationProvider):
     """主窗口类"""
     
     def __init__(self, task_manager: TaskManager):
@@ -61,6 +62,9 @@ class MainWindow(IWindowActions, IWindowProvider):
         # 窗口状态管理器
         self.window_state_manager: WindowStateManager = WindowStateManager(self)
         
+        # 通知控制器
+        self.notification_controller: NotificationController = NotificationController(self)
+        
         # 状态
         self.running = False
         self.refresh_timer = None
@@ -73,11 +77,6 @@ class MainWindow(IWindowActions, IWindowProvider):
         # 状态消息清除时间
         self.status_clear_time = 0
         
-        # 待机时间监控
-        self.monitoring_timer = None
-        self.last_monitoring = 0
-        self.monitoring_interval = 60.0  # 监控间隔：60秒
-        self.toast_manager = None  # 将在启动时初始化
         
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
@@ -194,8 +193,8 @@ class MainWindow(IWindowActions, IWindowProvider):
         self.running = True
         self._update_display()
         
-        # 初始化Toast管理器
-        self._initialize_toast_manager()
+        # 初始化通知控制器
+        self.notification_controller.initialize()
         
         # 更新数据提供器的状态管理器引用
         if hasattr(self.data_provider, 'set_task_status_manager'):
@@ -252,8 +251,12 @@ class MainWindow(IWindowActions, IWindowProvider):
         return self.window
     
     def get_config(self):
-        """获取配置对象 - IWindowProvider接口实现"""
+        """获取配置对象 - IWindowProvider和INotificationProvider接口实现"""
         return self.config
+    
+    def get_task_manager(self):
+        """获取任务管理器 - INotificationProvider接口实现"""
+        return self.task_manager
     
     def run(self):
         """运行主事件循环"""
@@ -298,9 +301,8 @@ class MainWindow(IWindowActions, IWindowProvider):
                     self.last_refresh = current_time
                 
                 # 定期监控待机时间
-                if current_time - self.last_monitoring > self.monitoring_interval:
-                    self._check_idle_tasks()
-                    self.last_monitoring = current_time
+                if self.notification_controller.should_check_idle_tasks(current_time):
+                    self.notification_controller.check_idle_tasks()
                 
                 # 检查状态消息是否需要清除
                 if self.status_clear_time > 0 and current_time >= self.status_clear_time:
@@ -409,84 +411,3 @@ class MainWindow(IWindowActions, IWindowProvider):
             self._update_display()
             self._set_status(f"已切换到: {task.name}", 3000)
     
-    def _initialize_toast_manager(self):
-        """初始化Toast管理器"""
-        try:
-            from utils.toast_manager import get_toast_manager
-            
-            self.toast_manager = get_toast_manager()
-            
-            # 从配置读取设置
-            monitoring_config = self.config.get_monitoring_config()
-            cooldown_minutes = monitoring_config.get('toast_cooldown_minutes', 30)
-            self.toast_manager.set_cooldown_minutes(cooldown_minutes)
-            
-            # 设置点击回调
-            self.toast_manager.on_toast_clicked = self._on_toast_clicked
-            
-            print("✓ Toast管理器初始化完成")
-            
-        except Exception as e:
-            print(f"初始化Toast管理器失败: {e}")
-            self.toast_manager = None
-    
-    def _check_idle_tasks(self):
-        """检查并处理待机时间超时的任务"""
-        try:
-            monitoring_config = self.config.get_monitoring_config()
-            
-            # 检查是否启用通知
-            if not monitoring_config.get('toast_notifications_enabled', True):
-                return
-            
-            if not self.toast_manager:
-                return
-            
-            # 获取超时任务
-            from utils.time_helper import get_overdue_tasks
-            current_task_index = self.task_manager.current_task_index
-            overdue_tasks = get_overdue_tasks(self.task_manager.get_all_tasks(), current_task_index)
-            
-            if not overdue_tasks:
-                return
-            
-            # 发送通知
-            if len(overdue_tasks) == 1:
-                # 单个任务通知
-                task_info = overdue_tasks[0]
-                self.toast_manager.send_idle_task_notification(
-                    task_info['task'].name,
-                    task_info['task'].id,
-                    task_info['display_time']
-                )
-            else:
-                # 多个任务汇总通知
-                self.toast_manager.send_multiple_tasks_notification(overdue_tasks)
-            
-        except Exception as e:
-            print(f"检查待机任务失败: {e}")
-    
-    def _on_toast_clicked(self, task_id: str):
-        """Toast通知点击回调"""
-        try:
-            # 查找对应的任务
-            task = self.task_manager.get_task_by_id(task_id)
-            if not task:
-                print(f"找不到任务: {task_id}")
-                return
-            
-            # 获取任务索引
-            all_tasks = self.task_manager.get_all_tasks()
-            for i, t in enumerate(all_tasks):
-                if t.id == task_id:
-                    # 切换到该任务
-                    success = self.task_manager.switch_to_task(i)
-                    if success:
-                        self._set_status(f"通过通知切换到: {task.name}", 3000)
-                        print(f"✓ 通过Toast通知切换到任务: {task.name}")
-                    else:
-                        print(f"✗ 切换到任务失败: {task.name}")
-                    break
-            
-        except Exception as e:
-            print(f"处理Toast点击失败: {e}")
