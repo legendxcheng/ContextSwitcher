@@ -26,9 +26,10 @@ from utils.config import get_config
 from gui.modern_config import ModernUIConfig
 from gui.table_data_provider import TableDataProvider, IDataProvider
 from gui.event_controller import EventController, IWindowActions
+from gui.window_state_manager import WindowStateManager, IWindowProvider
 
 
-class MainWindow(IWindowActions):
+class MainWindow(IWindowActions, IWindowProvider):
     """主窗口类"""
     
     def __init__(self, task_manager: TaskManager):
@@ -57,6 +58,9 @@ class MainWindow(IWindowActions):
         # 事件控制器
         self.event_controller: EventController = None  # 将在show方法中初始化
         
+        # 窗口状态管理器
+        self.window_state_manager: WindowStateManager = WindowStateManager(self)
+        
         # 状态
         self.running = False
         self.refresh_timer = None
@@ -78,10 +82,6 @@ class MainWindow(IWindowActions):
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
         
-        # 拖拽状态跟踪
-        self.window_was_dragged = False
-        self.last_mouse_pos = None
-        self.mouse_press_time = None
         
         # 设置现代化主题
         ModernUIConfig.setup_theme()
@@ -170,11 +170,9 @@ class MainWindow(IWindowActions):
         window_config['layout'] = self.layout
         
         # 窗口位置设置，不设置大小让其自适应
-        if self.window_config.get("remember_position", True):
-            window_config["location"] = (
-                self.window_config.get("x", 200),
-                self.window_config.get("y", 100)
-            )
+        restored_position = self.window_state_manager.restore_position()
+        if restored_position:
+            window_config["location"] = restored_position
         # 不设置size参数，让窗口完全自适应内容大小
         
         # 创建窗口
@@ -227,17 +225,8 @@ class MainWindow(IWindowActions):
             self.refresh_timer.cancel()
         
         # 保存窗口位置
-        if self.window and self.window_config.get("remember_position", True):
-            try:
-                location = self.window.current_location()
-                size = self.window.size
-                
-                if location and size:
-                    self.config.update_window_position(
-                        location[0], location[1], size[0], size[1]
-                    )
-            except Exception as e:
-                print(f"保存窗口位置失败: {e}")
+        if self.window:
+            self.window_state_manager.save_position()
         
         if self.window:
             self.window.close()
@@ -259,8 +248,12 @@ class MainWindow(IWindowActions):
         self._set_status(message, duration_ms)
     
     def get_window(self):
-        """获取窗口对象 - IWindowActions接口实现"""
+        """获取窗口对象 - IWindowActions和IWindowProvider接口实现"""
         return self.window
+    
+    def get_config(self):
+        """获取配置对象 - IWindowProvider接口实现"""
+        return self.config
     
     def run(self):
         """运行主事件循环"""
@@ -272,7 +265,7 @@ class MainWindow(IWindowActions):
         while self.running:
             try:
                 # 检查拖拽状态
-                self._check_drag_state()
+                was_dragged = self.window_state_manager.detect_drag()
                 
                 # 读取事件
                 event, values = self.window.read(timeout=50)  # 更短的超时以便及时检测拖拽
@@ -281,22 +274,22 @@ class MainWindow(IWindowActions):
                 if event == sg.WIN_CLOSED:
                     break
                 elif event == "-CLOSE-":
-                    if not self.window_was_dragged:
+                    if not was_dragged:
                         break
                     else:
-                        self.window_was_dragged = False  # 重置拖拽状态
+                        self.window_state_manager.reset_drag_state()  # 重置拖拽状态
                 else:
                     # 通过事件控制器处理所有其他事件
                     if self.event_controller:
                         # 同步拖拽状态到事件控制器
-                        self.event_controller.set_drag_state(self.window_was_dragged)
+                        self.event_controller.set_drag_state(was_dragged)
                         
                         # 处理事件
                         handled = self.event_controller.handle_event(event, values)
                         
                         # 如果事件被处理，重置拖拽状态
-                        if handled and self.window_was_dragged:
-                            self.window_was_dragged = False
+                        if handled and was_dragged:
+                            self.window_state_manager.reset_drag_state()
                 
                 # 定期刷新显示
                 current_time = time.time()
@@ -380,43 +373,6 @@ class MainWindow(IWindowActions):
         except Exception as e:
             print(f"更新显示失败: {e}")
     
-    
-    def _check_drag_state(self):
-        """检查窗口是否被拖拽"""
-        try:
-            import win32api
-            import win32gui
-            import time
-            
-            # 获取当前鼠标位置
-            current_mouse_pos = win32api.GetCursorPos()
-            
-            # 检查鼠标左键状态
-            left_button_pressed = win32api.GetKeyState(0x01) < 0
-            
-            if left_button_pressed:
-                # 鼠标按下，记录起始位置和时间
-                if self.last_mouse_pos is None:
-                    self.last_mouse_pos = current_mouse_pos
-                    self.mouse_press_time = time.time()
-                    self.window_was_dragged = False
-                else:
-                    # 检查鼠标是否移动了
-                    dx = abs(current_mouse_pos[0] - self.last_mouse_pos[0])
-                    dy = abs(current_mouse_pos[1] - self.last_mouse_pos[1])
-                    
-                    # 如果移动距离超过阈值，认为是拖拽
-                    if dx > 3 or dy > 3:
-                        self.window_was_dragged = True
-            else:
-                # 鼠标释放，重置状态（但保留拖拽标记一小段时间）
-                if self.last_mouse_pos is not None:
-                    self.last_mouse_pos = None
-                    self.mouse_press_time = None
-                    # 不立即重置 window_was_dragged，让事件处理器有时间检查
-                    
-        except Exception as e:
-            print(f"检查拖拽状态失败: {e}")
     
     def _set_status(self, message: str, duration_ms: int = 0):
         """设置状态消息
