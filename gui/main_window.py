@@ -25,9 +25,10 @@ from core.task_manager import TaskManager, Task, TaskStatus
 from utils.config import get_config
 from gui.modern_config import ModernUIConfig
 from gui.table_data_provider import TableDataProvider, IDataProvider
+from gui.event_controller import EventController, IWindowActions
 
 
-class MainWindow:
+class MainWindow(IWindowActions):
     """主窗口类"""
     
     def __init__(self, task_manager: TaskManager):
@@ -52,6 +53,9 @@ class MainWindow:
         
         # 数据提供器
         self.data_provider: IDataProvider = TableDataProvider(task_manager)
+        
+        # 事件控制器
+        self.event_controller: EventController = None  # 将在show方法中初始化
         
         # 状态
         self.running = False
@@ -199,6 +203,9 @@ class MainWindow:
         if hasattr(self.data_provider, 'set_task_status_manager'):
             self.data_provider.set_task_status_manager(self.task_status_manager)
         
+        # 初始化事件控制器
+        self.event_controller = EventController(self.task_manager, self)
+        
         # 设置任务管理器回调
         self.task_manager.on_task_added = self._on_task_changed
         self.task_manager.on_task_removed = self._on_task_changed
@@ -242,6 +249,19 @@ class MainWindow:
         
         print("✓ 主窗口已关闭")
     
+    # IWindowActions接口实现
+    def update_display(self):
+        """更新显示 - IWindowActions接口实现"""
+        self._update_display()
+    
+    def set_status(self, message: str, duration_ms: int = 0):
+        """设置状态消息 - IWindowActions接口实现"""
+        self._set_status(message, duration_ms)
+    
+    def get_window(self):
+        """获取窗口对象 - IWindowActions接口实现"""
+        return self.window
+    
     def run(self):
         """运行主事件循环"""
         if not self.window:
@@ -265,42 +285,18 @@ class MainWindow:
                         break
                     else:
                         self.window_was_dragged = False  # 重置拖拽状态
-                elif event == "-ADD_TASK-":
-                    if not self.window_was_dragged:
-                        self._handle_add_task()
-                    else:
-                        self.window_was_dragged = False  # 重置拖拽状态
-                elif event == "-EDIT_TASK-":
-                    if not self.window_was_dragged:
-                        self._handle_edit_task(values)
-                    else:
-                        self.window_was_dragged = False  # 重置拖拽状态
-                elif event == "-DELETE_TASK-":
-                    if not self.window_was_dragged:
-                        self._handle_delete_task(values)
-                    else:
-                        self.window_was_dragged = False  # 重置拖拽状态
-                elif event == "-REFRESH-":
-                    self._handle_refresh()
-                elif event == "-SETTINGS-":
-                    if not self.window_was_dragged:
-                        self._handle_settings()
-                    else:
-                        self.window_was_dragged = False  # 重置拖拽状态
-                elif event == "-TASK_TABLE-":
-                    self._handle_table_selection(values)
-                
-                elif event == "-TASK_TABLE- Double":
-                    self._handle_table_double_click(values)
-                
-                elif event == "-HOTKEY_TRIGGERED-":
-                    # 处理来自热键线程的切换器触发事件
-                    self._handle_hotkey_switcher_triggered()
-                
-                elif event == "-HOTKEY_ERROR-":
-                    # 处理来自热键线程的错误事件
-                    error_msg = values.get("-HOTKEY_ERROR-", "未知热键错误")
-                    self._handle_hotkey_error(error_msg)
+                else:
+                    # 通过事件控制器处理所有其他事件
+                    if self.event_controller:
+                        # 同步拖拽状态到事件控制器
+                        self.event_controller.set_drag_state(self.window_was_dragged)
+                        
+                        # 处理事件
+                        handled = self.event_controller.handle_event(event, values)
+                        
+                        # 如果事件被处理，重置拖拽状态
+                        if handled and self.window_was_dragged:
+                            self.window_was_dragged = False
                 
                 # 定期刷新显示
                 current_time = time.time()
@@ -335,8 +331,14 @@ class MainWindow:
             return
         
         try:
-            # 确定要使用的选中状态（优先使用保存的状态）
-            selection_to_restore = self.preserved_selection
+            # 确定要使用的选中状态（优先使用事件控制器中保存的状态）
+            selection_to_restore = None
+            if self.event_controller:
+                selection_to_restore = self.event_controller.get_preserved_selection()
+            
+            # 备用：使用MainWindow的preserved_selection
+            if selection_to_restore is None:
+                selection_to_restore = self.preserved_selection
             
             # 如果没有保存的状态，尝试获取当前选中状态
             if selection_to_restore is None:
@@ -416,176 +418,6 @@ class MainWindow:
         except Exception as e:
             print(f"检查拖拽状态失败: {e}")
     
-    def _handle_add_task(self):
-        """处理添加任务"""
-        try:
-            print("点击了添加任务按钮")  # 调试信息
-            from gui.task_dialog import TaskDialog
-            
-            dialog = TaskDialog(self.window, self.task_manager)
-            result = dialog.show_add_dialog()
-            
-            if result:
-                self._update_display()
-                self._set_status("任务添加成功", 3000)
-                print("任务添加成功")
-            else:
-                print("任务添加取消")
-            
-        except Exception as e:
-            print(f"添加任务失败: {e}")
-            import traceback
-            traceback.print_exc()
-            self._set_status("添加任务失败", 3000)
-    
-    def _handle_edit_task(self, values: Dict[str, Any]):
-        """处理编辑任务"""
-        try:
-            selected_rows = values.get("-TASK_TABLE-", [])
-            if not selected_rows:
-                sg.popup("请先选择要编辑的任务", title="提示")
-                return
-            
-            task_index = selected_rows[0]
-            task = self.task_manager.get_task_by_index(task_index)
-            
-            if not task:
-                sg.popup("任务不存在", title="错误")
-                return
-            
-            from gui.task_dialog import TaskDialog
-            
-            dialog = TaskDialog(self.window, self.task_manager)
-            result = dialog.show_edit_dialog(task)
-            
-            if result:
-                self._update_display()
-                self._set_status("任务编辑成功", 3000)
-            
-        except Exception as e:
-            print(f"编辑任务失败: {e}")
-            self._set_status("编辑任务失败", 3000)
-    
-    def _handle_delete_task(self, values: Dict[str, Any]):
-        """处理删除任务"""
-        try:
-            selected_rows = values.get("-TASK_TABLE-", [])
-            if not selected_rows:
-                sg.popup("请先选择要删除的任务", title="提示")
-                return
-            
-            task_index = selected_rows[0]
-            task = self.task_manager.get_task_by_index(task_index)
-            
-            if not task:
-                sg.popup("任务不存在", title="错误")
-                return
-            
-            # 确认删除
-            result = sg.popup_yes_no(
-                f"确定要删除任务 '{task.name}' 吗？\\n\\n此操作无法撤销。",
-                title="确认删除"
-            )
-            
-            if result == "Yes":
-                if self.task_manager.remove_task(task.id):
-                    self._update_display()
-                    self._set_status("任务删除成功", 3000)
-                else:
-                    sg.popup("删除任务失败", title="错误")
-            
-        except Exception as e:
-            print(f"删除任务失败: {e}")
-            self._set_status("删除任务失败", 3000)
-    
-    def _handle_refresh(self):
-        """处理刷新"""
-        try:
-            # 验证所有任务的窗口绑定
-            invalid_windows = self.task_manager.validate_all_tasks()
-            
-            if invalid_windows:
-                total_invalid = sum(len(windows) for windows in invalid_windows.values())
-                self._set_status(f"发现 {total_invalid} 个失效窗口", 3000)
-            
-            self._update_display()
-            self._set_status("刷新完成", 2000)
-            
-        except Exception as e:
-            print(f"刷新失败: {e}")
-            self._set_status("刷新失败", 3000)
-    
-    
-    def _handle_settings(self):
-        """处理设置"""
-        try:
-            from gui.settings_dialog import SettingsDialog
-            
-            dialog = SettingsDialog(self.window, self.task_manager)
-            result = dialog.show_settings_dialog()
-            
-            if result:
-                self._update_display()
-                self._set_status("设置已保存", 3000)
-                print("✓ 设置已保存并应用")
-            
-        except ImportError:
-            sg.popup("设置功能开发中...", title="设置")
-        except Exception as e:
-            print(f"打开设置失败: {e}")
-            sg.popup(f"打开设置失败: {e}", title="错误")
-    
-    def _handle_table_selection(self, values: Dict[str, Any]):
-        """处理表格选择事件"""
-        try:
-            selected_rows = values.get("-TASK_TABLE-", [])
-            if selected_rows:
-                task_index = selected_rows[0]
-                # 保存选中状态
-                self.preserved_selection = task_index
-                
-                task = self.task_manager.get_task_by_index(task_index)
-                if task:
-                    self._set_status(f"已选择: {task.name}", 2000)
-            else:
-                # 清除选中状态
-                self.preserved_selection = None
-            
-        except Exception as e:
-            print(f"处理表格选择失败: {e}")
-    
-    def _handle_table_double_click(self, values: Dict[str, Any]):
-        """处理表格双击事件 - 切换到任务窗口"""
-        try:
-            selected_rows = values.get("-TASK_TABLE-", [])
-            if not selected_rows:
-                print("⚠️ 双击事件：没有选中的任务")
-                return
-            
-            task_index = selected_rows[0]
-            task = self.task_manager.get_task_by_index(task_index)
-            
-            if not task:
-                print(f"⚠️ 找不到索引为 {task_index} 的任务")
-                return
-            
-            print(f"🖱️ 双击任务: {task.name}")
-            self._set_status(f"正在切换到: {task.name}", 1000)
-            
-            # 使用任务管理器切换到该任务
-            success = self.task_manager.switch_to_task(task_index)
-            
-            if success:
-                print(f"✅ 成功切换到任务: {task.name}")
-                self._set_status(f"已切换到: {task.name}", 3000)
-            else:
-                print(f"❌ 切换任务失败: {task.name}")
-                self._set_status(f"切换失败: {task.name}", 3000)
-            
-        except Exception as e:
-            print(f"处理表格双击失败: {e}")
-            self._set_status("切换任务失败", 2000)
-    
     def _set_status(self, message: str, duration_ms: int = 0):
         """设置状态消息
         
@@ -611,6 +443,8 @@ class MainWindow:
         if self.running:
             # 任务发生变化时，清除保存的选中状态以避免索引错位
             self.preserved_selection = None
+            if self.event_controller:
+                self.event_controller.set_preserved_selection(None)
             self._update_display()
     
     def _on_task_switched(self, task: Task, index: int):
@@ -700,31 +534,3 @@ class MainWindow:
             
         except Exception as e:
             print(f"处理Toast点击失败: {e}")
-    
-    def _handle_hotkey_switcher_triggered(self):
-        """处理热键线程发送的切换器触发事件（线程安全）"""
-        try:
-            # 获取主程序实例，通过回调来显示任务切换器
-            # 这样避免直接在主窗口中操作任务切换器
-            if hasattr(self, '_app_instance') and self._app_instance:
-                # 如果有应用实例的引用，调用其方法
-                self._app_instance.show_task_switcher()
-            else:
-                # 备用方案：直接调用全局回调（如果设置了）
-                if hasattr(self, 'on_hotkey_switcher_triggered') and self.on_hotkey_switcher_triggered:
-                    self.on_hotkey_switcher_triggered()
-                else:
-                    print("⚠️ 未找到任务切换器回调方法")
-            
-        except Exception as e:
-            print(f"处理热键切换器触发失败: {e}")
-    
-    def _handle_hotkey_error(self, error_msg: str):
-        """处理热键线程发送的错误事件（线程安全）"""
-        try:
-            print(f"⚠️ 热键错误: {error_msg}")
-            # 在主线程中安全地显示错误状态
-            self._set_status(f"热键错误: {error_msg}", 5000)
-            
-        except Exception as e:
-            print(f"处理热键错误失败: {e}")
