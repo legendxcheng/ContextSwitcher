@@ -49,12 +49,29 @@ class TableDataProvider(IDataProvider):
             if len(task_name) > 15:
                 task_name = task_name[:13] + ".."
             
-            # 绑定窗口数量 - 紧凑显示
+            # 绑定窗口数量和Explorer路径信息
             valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
             total_windows = len(task.bound_windows)
             
+            # 检查是否有Explorer窗口并获取路径信息
+            explorer_paths = []
+            for window in task.bound_windows:
+                if window.folder_path and window.process_name and window.process_name.lower() == 'explorer.exe':
+                    # 截取路径显示（只显示最后的文件夹名）
+                    path_parts = window.folder_path.replace('\\', '/').split('/')
+                    folder_name = path_parts[-1] if path_parts else window.folder_path
+                    if len(folder_name) > 12:
+                        folder_name = folder_name[:10] + ".."
+                    explorer_paths.append(f"📁{folder_name}")
+            
             if total_windows == 0:
                 windows_info = "-"
+            elif explorer_paths:
+                # 如果有Explorer窗口，优先显示路径信息
+                if len(explorer_paths) == 1:
+                    windows_info = explorer_paths[0]
+                else:
+                    windows_info = f"{explorer_paths[0]}+{len(explorer_paths)-1}"
             elif valid_windows == total_windows:
                 windows_info = str(total_windows) if total_windows < 10 else "9+"
             else:
@@ -114,3 +131,35 @@ class TableDataProvider(IDataProvider):
     def set_task_status_manager(self, task_status_manager):
         """设置任务状态管理器"""
         self.task_status_manager = task_status_manager
+    
+    def get_windows_tooltip(self, task_index: int) -> str:
+        """获取指定任务的窗口信息工具提示
+        
+        Args:
+            task_index: 任务索引
+            
+        Returns:
+            工具提示文本
+        """
+        if not (0 <= task_index < len(self.task_manager.tasks)):
+            return ""
+        
+        task = self.task_manager.tasks[task_index]
+        
+        if not task.bound_windows:
+            return "无绑定窗口"
+        
+        tooltip_lines = []
+        for i, window in enumerate(task.bound_windows):
+            status = "✓" if window.is_valid else "✗"
+            
+            # 基本窗口信息
+            window_info = f"{status} {window.title}"
+            
+            # 如果是Explorer窗口，添加完整路径信息
+            if window.folder_path and window.process_name and window.process_name.lower() == 'explorer.exe':
+                window_info += f"\n   📁 {window.folder_path}"
+            
+            tooltip_lines.append(window_info)
+        
+        return "\n".join(tooltip_lines)

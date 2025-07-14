@@ -17,6 +17,7 @@ from dataclasses import dataclass, field, asdict
 from enum import Enum
 
 from core.window_manager import WindowManager, WindowInfo
+from core.explorer_helper import ExplorerHelper
 
 
 class TaskStatus(Enum):
@@ -37,6 +38,8 @@ class BoundWindow:
     process_name: str      # 进程名
     binding_time: str      # 绑定时间
     is_valid: bool = True  # 窗口是否仍然有效
+    folder_path: Optional[str] = None  # Explorer窗口的文件夹路径
+    window_rect: Optional[Tuple[int, int, int, int]] = None  # 窗口位置和大小 (left, top, right, bottom)
 
 
 @dataclass 
@@ -78,6 +81,11 @@ class Task:
             windows = []
             for window_data in data['bound_windows']:
                 if isinstance(window_data, dict):
+                    # 确保新字段有默认值（向后兼容性）
+                    if 'folder_path' not in window_data:
+                        window_data['folder_path'] = None
+                    if 'window_rect' not in window_data:
+                        window_data['window_rect'] = None
                     windows.append(BoundWindow(**window_data))
                 else:
                     windows.append(window_data)
@@ -96,6 +104,7 @@ class TaskManager:
             window_manager: 窗口管理器实例
         """
         self.window_manager = window_manager or WindowManager()
+        self.explorer_helper = ExplorerHelper()
         self.tasks: List[Task] = []
         self.current_task_index: int = -1
         self.max_tasks = 9  # 最多支持9个任务（对应数字键1-9）
@@ -415,12 +424,24 @@ class TaskManager:
         for hwnd in window_hwnds:
             window_info = self.window_manager.get_window_info(hwnd)
             if window_info:
+                # 获取窗口位置信息
+                window_rect = self.explorer_helper.get_window_rect(hwnd)
+                
+                # 如果是Explorer窗口，获取文件夹路径
+                folder_path = None
+                if self.explorer_helper.is_explorer_window(hwnd):
+                    folder_path = self.explorer_helper.get_explorer_folder_path(hwnd)
+                    if folder_path:
+                        print(f"  ✓ 检测到Explorer路径: {folder_path}")
+                
                 bound_window = BoundWindow(
                     hwnd=hwnd,
                     title=window_info.title,
                     process_name=window_info.process_name,
                     binding_time=datetime.now().isoformat(),
-                    is_valid=True
+                    is_valid=True,
+                    folder_path=folder_path,
+                    window_rect=window_rect
                 )
                 task.bound_windows.append(bound_window)
                 print(f"  ✓ 已绑定窗口: {window_info.title}")
@@ -428,7 +449,7 @@ class TaskManager:
                 print(f"  ✗ 无效窗口句柄: {hwnd}")
     
     def _validate_bound_windows(self, task: Task) -> List[BoundWindow]:
-        """验证任务的绑定窗口，返回有效窗口列表"""
+        """验证任务的绑定窗口，返回有效窗口列表（支持Explorer窗口恢复）"""
         valid_windows = []
         
         for window in task.bound_windows:
@@ -438,6 +459,21 @@ class TaskManager:
             else:
                 window.is_valid = False
                 print(f"  ✗ 窗口已失效: {window.title}")
+                
+                # 如果是Explorer窗口且有路径信息，尝试恢复
+                if (window.folder_path and 
+                    window.process_name and 
+                    window.process_name.lower() == 'explorer.exe'):
+                    
+                    print(f"  🔄 尝试恢复Explorer窗口: {window.folder_path}")
+                    
+                    if self.explorer_helper.restore_explorer_window(
+                        window.folder_path, window.window_rect):
+                        
+                        print(f"  ✓ Explorer窗口恢复成功，请手动重新绑定")
+                        # 注意：这里不更新window.hwnd，因为需要用户手动重新绑定新窗口
+                    else:
+                        print(f"  ✗ Explorer窗口恢复失败")
         
         return valid_windows
     

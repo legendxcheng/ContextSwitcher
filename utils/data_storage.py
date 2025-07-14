@@ -57,7 +57,7 @@ class DataStorage:
             
             # 创建完整的数据结构
             data = {
-                "version": "1.0.0",
+                "version": "1.1.0",  # 更新版本号以支持Explorer路径信息
                 "saved_at": datetime.now().isoformat(),
                 "task_count": len(tasks_data),
                 "tasks": tasks_data
@@ -111,10 +111,16 @@ class DataStorage:
             if not isinstance(tasks_data, list):
                 raise ValueError("数据格式错误：tasks不是列表")
             
-            # 数据版本检查
+            # 数据版本检查和迁移
             version = data.get("version", "unknown")
-            if version != "1.0.0":
-                print(f"警告: 数据版本不匹配 ({version})，可能需要迁移")
+            if version in ["1.0.0", "1.1.0"]:
+                # 支持的版本，正常加载
+                pass
+            elif version == "unknown":
+                print(f"警告: 检测到旧版本数据格式，将自动迁移")
+                # 旧版本数据会通过Task.from_dict的向后兼容性处理
+            else:
+                print(f"警告: 数据版本不匹配 ({version})，尝试向下兼容")
             
             print(f"✓ 已加载 {len(tasks_data)} 个任务")
             return tasks_data
