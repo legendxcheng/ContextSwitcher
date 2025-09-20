@@ -75,7 +75,7 @@ class WindowStateManager(IWindowManager):
         # 拖拽检测参数
         self.drag_threshold = 3  # 拖拽检测阈值（像素）
         
-        print("✓ 窗口状态管理器初始化完成")
+        print("[OK] 窗口状态管理器初始化完成")
     
     def detect_drag(self) -> bool:
         """检测窗口是否被拖拽
@@ -149,11 +149,68 @@ class WindowStateManager(IWindowManager):
                 config.update_window_position(
                     location[0], location[1], size[0], size[1]
                 )
-                print(f"✓ 窗口位置已保存: {location}, 大小: {size}")
+                print(f"[OK] 窗口位置已保存: {location}, 大小: {size}")
             
         except Exception as e:
             print(f"保存窗口位置失败: {e}")
     
+    def get_current_window_position(self) -> Optional[Tuple[int, int]]:
+        """获取当前窗口位置
+        
+        Returns:
+            当前窗口位置 (x, y) 或 None
+        """
+        try:
+            window = self.window_provider.get_window()
+            if window and hasattr(window, 'current_location'):
+                location = window.current_location()
+                if location and len(location) == 2:
+                    return location
+        except Exception as e:
+            print(f"获取当前窗口位置失败: {e}")
+        return None
+    
+    def get_current_window_size(self) -> Optional[Tuple[int, int]]:
+        """获取当前窗口尺寸
+        
+        Returns:
+            当前窗口尺寸 (width, height) 或 None
+        """
+        try:
+            window = self.window_provider.get_window()
+            if window and hasattr(window, 'size'):
+                size = window.size
+                if size and len(size) == 2:
+                    return size
+        except Exception as e:
+            print(f"获取当前窗口尺寸失败: {e}")
+        return None
+    
+    def get_window_info_for_dialogs(self) -> dict:
+        """获取用于对话框位置计算的窗口信息
+        
+        Returns:
+            包含位置和尺寸信息的字典
+        """
+        try:
+            position = self.get_current_window_position()
+            size = self.get_current_window_size()
+            
+            return {
+                'position': position,
+                'size': size,
+                'has_position': position is not None,
+                'has_size': size is not None
+            }
+        except Exception as e:
+            print(f"获取窗口信息失败: {e}")
+            return {
+                'position': None,
+                'size': None,
+                'has_position': False,
+                'has_size': False
+            }
+
     def restore_position(self) -> None:
         """恢复窗口位置"""
         try:
@@ -163,7 +220,7 @@ class WindowStateManager(IWindowManager):
             if window_config.get("remember_position", True):
                 x = window_config.get("x", 200)
                 y = window_config.get("y", 100)
-                print(f"✓ 窗口位置将恢复到: ({x}, {y})")
+                print(f"[OK] 窗口位置将恢复到: ({x}, {y})")
                 return (x, y)
             
         except Exception as e:
@@ -183,7 +240,7 @@ class WindowStateManager(IWindowManager):
         """
         if threshold > 0:
             self.drag_threshold = threshold
-            print(f"✓ 拖拽检测阈值设置为: {threshold}px")
+            print(f"[OK] 拖拽检测阈值设置为: {threshold}px")
     
     def get_mouse_info(self) -> dict:
         """获取鼠标状态信息（用于调试）"""

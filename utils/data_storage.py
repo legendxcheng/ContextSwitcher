@@ -75,7 +75,7 @@ class DataStorage:
             # 原子替换
             shutil.move(str(temp_file), str(self.tasks_file))
             
-            print(f"✓ 已保存 {len(tasks_data)} 个任务到 {self.tasks_file}")
+            print(f"[OK] 已保存 {len(tasks_data)} 个任务到 {self.tasks_file}")
             return True
             
         except Exception as e:
@@ -122,7 +122,7 @@ class DataStorage:
             else:
                 print(f"警告: 数据版本不匹配 ({version})，尝试向下兼容")
             
-            print(f"✓ 已加载 {len(tasks_data)} 个任务")
+            print(f"[OK] 已加载 {len(tasks_data)} 个任务")
             return tasks_data
             
         except FileNotFoundError:
@@ -168,7 +168,7 @@ class DataStorage:
             backup_file = self.backup_dir / f"tasks_{timestamp}.json"
             
             shutil.copy2(self.tasks_file, backup_file)
-            print(f"✓ 已创建备份: {backup_file.name}")
+            print(f"[OK] 已创建备份: {backup_file.name}")
             
             # 清理旧备份
             self._cleanup_old_backups()
@@ -193,7 +193,7 @@ class DataStorage:
             files_to_delete = backup_files[:-self.max_backups]
             for file_path in files_to_delete:
                 file_path.unlink()
-                print(f"✓ 已删除旧备份: {file_path.name}")
+                print(f"[OK] 已删除旧备份: {file_path.name}")
                 
         except Exception as e:
             print(f"清理备份失败: {e}")
@@ -215,7 +215,7 @@ class DataStorage:
                 data = json.load(f)
             
             tasks_data = data.get("tasks", [])
-            print(f"✓ 从备份恢复了 {len(tasks_data)} 个任务")
+            print(f"[OK] 从备份恢复了 {len(tasks_data)} 个任务")
             
             return tasks_data
             
@@ -257,7 +257,7 @@ class DataStorage:
             with open(export_file, 'w', encoding='utf-8') as f:
                 json.dump(export_data, f, indent=2, ensure_ascii=False)
             
-            print(f"✓ 已导出 {len(tasks_data)} 个任务到 {export_path}")
+            print(f"[OK] 已导出 {len(tasks_data)} 个任务到 {export_path}")
             return True
             
         except Exception as e:
@@ -291,7 +291,7 @@ class DataStorage:
             if not isinstance(tasks_data, list):
                 raise ValueError("任务数据格式错误")
             
-            print(f"✓ 已导入 {len(tasks_data)} 个任务")
+            print(f"[OK] 已导入 {len(tasks_data)} 个任务")
             return tasks_data
             
         except Exception as e:
@@ -343,7 +343,7 @@ class DataStorage:
             # 删除任务文件
             if self.tasks_file.exists():
                 self.tasks_file.unlink()
-                print("✓ 已删除任务文件")
+                print("[OK] 已删除任务文件")
             
             return True
             

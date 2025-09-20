@@ -22,6 +22,8 @@ from core.task_manager import TaskManager, Task, TaskStatus
 from core.window_manager import WindowInfo
 from gui.window_selector import WindowSelector
 from gui.modern_config import ModernUIConfig
+from utils.dialog_position_manager import get_dialog_position_manager
+from utils.popup_helper import PopupManager
 
 
 class TaskDialog:
@@ -37,6 +39,12 @@ class TaskDialog:
         self.parent_window = parent_window
         self.task_manager = task_manager
         self.window_selector = WindowSelector(task_manager.window_manager)
+        
+        # 对话框位置管理器
+        self.position_manager = get_dialog_position_manager()
+        
+        # 弹窗管理器
+        self.popup_manager = PopupManager(parent_window)
         
         # 对话框窗口
         self.dialog_window: Optional[sg.Window] = None
@@ -60,6 +68,21 @@ class TaskDialog:
         
         # 编辑模式标识
         self._editing_task_id = None
+    
+    def _get_main_window_position(self) -> Optional[tuple]:
+        """获取主窗口位置
+        
+        Returns:
+            主窗口位置 (x, y) 或 None
+        """
+        try:
+            if self.parent_window and hasattr(self.parent_window, 'current_location'):
+                location = self.parent_window.current_location()
+                if location and len(location) == 2:
+                    return location
+        except Exception as e:
+            print(f"获取主窗口位置失败: {e}")
+        return None
     
     def show_add_dialog(self) -> bool:
         """显示添加任务对话框
@@ -86,6 +109,13 @@ class TaskDialog:
         # 获取图标路径
         icon_path = ModernUIConfig._get_icon_path()
         
+        # 动态计算对话框位置
+        dialog_size = (620, 650)
+        main_window_position = self._get_main_window_position()
+        dialog_position = self.position_manager.get_task_dialog_position(
+            dialog_size, main_window_position
+        )
+        
         self.dialog_window = sg.Window(
             "添加任务",
             layout,
@@ -93,8 +123,8 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(620, 650),  # 减少高度并让Frame自动扩展填充
-            location=(200, 100),  # 调整位置以便更好显示
+            size=dialog_size,
+            location=dialog_position,  # 使用动态计算的位置
             no_titlebar=False,  # 对话框保留标题栏
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
@@ -163,6 +193,13 @@ class TaskDialog:
         # 获取图标路径
         icon_path = ModernUIConfig._get_icon_path()
         
+        # 动态计算对话框位置
+        dialog_size = (620, 650)
+        main_window_position = self._get_main_window_position()
+        dialog_position = self.position_manager.get_task_dialog_position(
+            dialog_size, main_window_position
+        )
+        
         self.dialog_window = sg.Window(
             f"编辑任务 - {task.name}",
             layout,
@@ -170,8 +207,8 @@ class TaskDialog:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(620, 650),  # 减少高度并让Frame自动扩展填充
-            location=(200, 100),  # 调整位置以便更好显示
+            size=dialog_size,
+            location=dialog_position,  # 使用动态计算的位置
             no_titlebar=False,  # 对话框保留标题栏
             alpha_channel=0.98,  # 轻微透明
             background_color="#202020",
@@ -382,7 +419,7 @@ class TaskDialog:
         # 检查任务名称
         task_name = values["-TASK_NAME-"].strip()
         if not task_name:
-            sg.popup("请输入任务名称", title="验证错误")
+            self.popup_manager.show_error("请输入任务名称", "验证错误")
             return False
         
         # 检查名称重复（编辑时跳过当前任务）
@@ -393,16 +430,16 @@ class TaskDialog:
                 if hasattr(self, '_editing_task_id') and self._editing_task_id is not None and task.id == self._editing_task_id:
                     print(f"🔍 编辑模式：跳过当前任务 {task.id} 的名称验证")
                     continue
-                sg.popup(f"任务名称 '{task_name}' 已存在", title="验证错误")
+                self.popup_manager.show_error(f"任务名称 '{task_name}' 已存在", "验证错误")
                 return False
         
         # 检查是否选择了窗口
         if not self.selected_windows:
-            result = sg.popup_yes_no(
+            result = self.popup_manager.show_question(
                 "没有选择任何窗口，确定要创建此任务吗？",
-                title="确认"
+                "确认"
             )
-            if result != "Yes":
+            if not result:
                 return False
         
         return True
@@ -491,7 +528,7 @@ class TaskDialog:
             
         except Exception as e:
             print(f"刷新窗口列表失败: {e}")
-            sg.popup(f"刷新失败: {e}", title="错误")
+            self.popup_manager.show_error(f"刷新失败: {e}", "错误")
     
     def _filter_and_sort_windows(self, windows: List[WindowInfo]) -> List[WindowInfo]:
         """使用智能排序和搜索过滤窗口列表"""
@@ -592,7 +629,7 @@ class TaskDialog:
         try:
             selected_rows = values.get("-WINDOW_TABLE-", [])
             if not selected_rows:
-                sg.popup("请先选择一个窗口", title="提示")
+                self.popup_manager.show_message("请先选择一个窗口", "提示")
                 return
             
             row_index = selected_rows[0]
@@ -604,13 +641,13 @@ class TaskDialog:
             
             if not table_data or row_index >= len(table_data):
                 print(f"表格数据异常: row_index={row_index}, len(table_data)={len(table_data) if table_data else 0}")
-                sg.popup("表格数据异常", title="错误")
+                self.popup_manager.show_error("表格数据异常", "错误")
                 return
             
             # 检查行数据格式
             if not isinstance(table_data[row_index], list) or len(table_data[row_index]) < 5:
                 print(f"表格行数据格式异常: {table_data[row_index]}")
-                sg.popup("表格行数据格式异常", title="错误")
+                self.popup_manager.show_error("表格行数据格式异常", "错误")
                 return
             
             # 获取窗口句柄 (新表格结构中句柄在第4列，索引为4)
@@ -620,7 +657,7 @@ class TaskDialog:
             # 检查是否已经选择
             selected_hwnds = [w.hwnd for w in self.selected_windows]
             if hwnd in selected_hwnds:
-                sg.popup("此窗口已经选择", title="提示")
+                self.popup_manager.show_message("此窗口已经选择", "提示")
                 return
             
             # 获取窗口信息并添加
@@ -632,11 +669,11 @@ class TaskDialog:
                 print(f"已添加窗口: {window_info.title}")
                 # 不再显示弹窗提示，保持界面简洁
             else:
-                sg.popup("窗口信息获取失败", title="错误")
+                self.popup_manager.show_error("窗口信息获取失败", "错误")
                 
         except Exception as e:
             print(f"添加窗口失败: {e}")
-            sg.popup(f"添加失败: {e}", title="错误")
+            self.popup_manager.show_error(f"添加失败: {e}", "错误")
     
     def _add_window_by_row_index(self, row_index: int):
         """通过行索引直接添加窗口（双击触发，无弹窗提示）"""
@@ -696,7 +733,7 @@ class TaskDialog:
         try:
             selected_items = values.get("-SELECTED_WINDOWS-", [])
             if not selected_items:
-                sg.popup("请先选择要移除的窗口", title="提示")
+                self.popup_manager.show_message("请先选择要移除的窗口", "提示")
                 return
             
             selected_text = selected_items[0]
@@ -714,9 +751,9 @@ class TaskDialog:
                 self._update_selected_windows_display()
                 self._refresh_window_list()
                 print(f"已移除窗口: {removed_window.title}")
-                sg.popup_timed(f"已移除窗口: {removed_window.title}", auto_close_duration=2, title="成功")
+                self.popup_manager.show_timed_message(f"已移除窗口: {removed_window.title}", 2, "成功")
             else:
-                sg.popup("未找到要移除的窗口", title="错误")
+                self.popup_manager.show_error("未找到要移除的窗口", "错误")
             
         except Exception as e:
             print(f"移除窗口失败: {e}")

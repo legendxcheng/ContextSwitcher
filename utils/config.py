@@ -9,6 +9,7 @@
 """
 
 import os
+import sys
 import json
 from typing import Dict, Any, Optional
 from pathlib import Path
@@ -72,7 +73,42 @@ class Config:
         self.config = self._load_config()
     
     def _get_config_dir(self) -> Path:
-        """获取配置文件目录"""
+        """获取配置文件目录
+        
+        优先使用可执行文件所在目录存储数据，确保数据持久性。
+        如果权限不足，则回退到用户目录。
+        """
+        try:
+            # 第一优先级：使用可执行文件所在目录
+            if getattr(sys, 'frozen', False):
+                # PyInstaller 打包环境
+                app_dir = Path(sys.executable).parent
+                print(f"检测到打包环境，exe路径: {sys.executable}")
+            else:
+                # 开发环境：使用项目根目录
+                app_dir = Path(__file__).parent.parent
+                print(f"检测到开发环境，项目根目录: {app_dir}")
+            
+            # 在应用目录下创建data子目录
+            config_dir = app_dir / "data"
+            print(f"尝试使用数据目录: {config_dir}")
+            
+            # 测试目录的创建和写权限
+            config_dir.mkdir(parents=True, exist_ok=True)
+            test_file = config_dir / ".write_test"
+            test_file.write_text("permission_test")
+            test_file.unlink()
+            
+            print(f"数据目录权限检查通过: {config_dir}")
+            return config_dir
+            
+        except (OSError, PermissionError) as e:
+            print(f"安装目录权限不足 ({e})，回退到用户目录")
+            # 权限不足，回退到用户目录
+            return self._get_fallback_config_dir()
+    
+    def _get_fallback_config_dir(self) -> Path:
+        """获取备用配置目录（用户目录）"""
         if os.name == 'nt':
             # Windows: %APPDATA%\ContextSwitcher
             appdata = os.environ.get('APPDATA', '')
@@ -86,6 +122,7 @@ class Config:
         
         # 确保目录存在
         config_dir.mkdir(parents=True, exist_ok=True)
+        print(f"使用备用数据目录: {config_dir}")
         return config_dir
     
     def _load_config(self) -> Dict[str, Any]:

@@ -81,43 +81,43 @@ class ContextSwitcher:
             
             # 初始化数据存储
             self.data_storage = DataStorage()
-            print("  ✓ 数据存储模块")
+            print("  [OK] 数据存储模块")
             
             # 初始化任务管理器
             self.task_manager = TaskManager()
-            print("  ✓ 任务管理器")
+            print("  [OK] 任务管理器")
             
             # 初始化热键管理器
             self.hotkey_manager = HotkeyManager(self.task_manager)
-            print("  ✓ 热键管理器")
+            print("  [OK] 热键管理器")
             
             # 初始化智能重新绑定管理器
             self.smart_rebind_manager = SmartRebindManager(
                 self.task_manager, self.task_manager.window_manager
             )
-            print("  ✓ 智能重新绑定管理器")
+            print("  [OK] 智能重新绑定管理器")
             
             # 初始化任务状态管理器
             self.task_status_manager = TaskStatusManager(self.task_manager)
-            print("  ✓ 任务状态管理器")
+            print("  [OK] 任务状态管理器")
             
             # 初始化主窗口
             self.main_window = MainWindow(self.task_manager)
             self.main_window.smart_rebind_manager = self.smart_rebind_manager
             self.main_window.task_status_manager = self.task_status_manager
             self.main_window.on_window_closed = self.cleanup
-            print("  ✓ 主窗口")
+            print("  [OK] 主窗口")
             
             # 初始化任务切换器
             from gui.task_switcher_dialog import TaskSwitcherDialog
             self.task_switcher = TaskSwitcherDialog(self.task_manager)
-            print("  ✓ 任务切换器")
+            print("  [OK] 任务切换器")
             
-            print("✓ 组件初始化完成")
+            print("[OK] 组件初始化完成")
             return True
             
         except Exception as e:
-            print(f"✗ 组件初始化失败: {e}")
+            print(f"[ERROR] 组件初始化失败: {e}")
             traceback.print_exc()
             return False
     
@@ -137,14 +137,14 @@ class ContextSwitcher:
                     except Exception as e:
                         print(f"加载任务失败 {task_data.get('name', 'Unknown')}: {e}")
                 
-                print(f"✓ 已加载 {len(self.task_manager.tasks)} 个任务")
+                print(f"[OK] 已加载 {len(self.task_manager.tasks)} 个任务")
             else:
-                print("✓ 无历史任务数据，从空白开始")
+                print("[OK] 无历史任务数据，从空白开始")
             
             return True
             
         except Exception as e:
-            print(f"✗ 数据加载失败: {e}")
+            print(f"[ERROR] 数据加载失败: {e}")
             return False
     
     def register_hotkeys(self):
@@ -153,7 +153,7 @@ class ContextSwitcher:
             # 设置主窗口引用到热键管理器（用于线程安全通信）
             if self.main_window and self.main_window.window:
                 self.hotkey_manager.set_main_window(self.main_window.window)
-                print("✓ 热键管理器已连接到主窗口")
+                print("[OK] 热键管理器已连接到主窗口")
             else:
                 print("⚠️ 主窗口未创建，使用备用回调方案")
                 # 设置切换器回调作为备用方案
@@ -167,14 +167,14 @@ class ContextSwitcher:
             success = self.hotkey_manager.start()
             
             if success:
-                print("✓ 热键注册完成")
+                print("[OK] 热键注册完成")
                 return True
             else:
-                print("✗ 热键注册失败")
+                print("[ERROR] 热键注册失败")
                 return False
             
         except Exception as e:
-            print(f"✗ 热键注册失败: {e}")
+            print(f"[ERROR] 热键注册失败: {e}")
             return False
     
     def show_task_switcher(self):
@@ -182,7 +182,15 @@ class ContextSwitcher:
         try:
             if self.task_switcher:
                 print("🎯 热键触发任务切换器...")
-                result = self.task_switcher.show()
+                # 获取主窗口位置
+                main_window_position = None
+                if self.main_window:
+                    try:
+                        main_window_position = self.main_window.window_state_manager.get_current_window_position()
+                    except:
+                        pass
+                
+                result = self.task_switcher.show(main_window_position)
                 if result:
                     print("✅ 任务切换器执行成功")
                 else:
@@ -239,10 +247,10 @@ class ContextSwitcher:
             [sg.Text("项目结构创建完成!")],
             [sg.Text("状态: 等待功能模块开发...")],
             [sg.Multiline(
-                "✓ 项目目录结构已创建\n"
-                "✓ requirements.txt已生成\n"
-                "✓ __init__.py文件已创建\n"
-                "✓ main.py入口文件已创建\n"
+                "[OK] 项目目录结构已创建\n"
+                "[OK] requirements.txt已生成\n"
+                "[OK] __init__.py文件已创建\n"
+                "[OK] main.py入口文件已创建\n"
                 "\n下一步:\n"
                 "- 实现window_manager.py\n"
                 "- 实现task_manager.py\n"
@@ -273,22 +281,22 @@ class ContextSwitcher:
             # 清理任务切换器
             if self.task_switcher:
                 self.task_switcher._cleanup()
-                print("✓ 任务切换器已清理")
+                print("[OK] 任务切换器已清理")
             
             # 注销热键
             if self.hotkey_manager:
                 self.hotkey_manager.cleanup()
-                print("✓ 热键已注销")
+                print("[OK] 热键已注销")
             
             # 保存数据
             if self.data_storage and self.task_manager:
                 tasks = self.task_manager.get_all_tasks()
                 if self.data_storage.save_tasks(tasks):
-                    print("✓ 数据已保存")
+                    print("[OK] 数据已保存")
                 else:
-                    print("✗ 数据保存失败")
+                    print("[ERROR] 数据保存失败")
             
-            print("✓ 资源清理完成")
+            print("[OK] 资源清理完成")
             
         except Exception as e:
             print(f"清理资源时出错: {e}")

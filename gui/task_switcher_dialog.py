@@ -21,6 +21,7 @@ except ImportError:
 from core.task_manager import TaskManager, Task
 from gui.modern_config import ModernUIConfig
 from utils.screen_helper import ScreenHelper
+from utils.dialog_position_manager import get_dialog_position_manager
 
 
 class TaskSwitcherDialog:
@@ -34,6 +35,7 @@ class TaskSwitcherDialog:
         """
         self.task_manager = task_manager
         self.screen_helper = ScreenHelper()
+        self.position_manager = get_dialog_position_manager()
         
         # 加载配置
         from utils.config import get_config
@@ -172,8 +174,11 @@ class TaskSwitcherDialog:
             # 备用方案：只在控制台输出
             print("💡 提示: 请先在主窗口添加任务，然后使用 Ctrl+Alt+空格 切换")
     
-    def show(self) -> bool:
+    def show(self, main_window_position: Tuple[int, int] = None) -> bool:
         """显示任务切换器对话框
+        
+        Args:
+            main_window_position: 主窗口位置 (x, y)，用于计算最佳显示位置
         
         Returns:
             是否成功执行了任务切换
@@ -221,8 +226,14 @@ class TaskSwitcherDialog:
             # 根据任务数量动态计算窗口尺寸
             dynamic_window_size = self._calculate_window_size(len(self.tasks))
             
-            # 计算窗口显示位置
-            window_position = self.screen_helper.get_optimal_window_position(dynamic_window_size)
+            # 计算窗口显示位置 - 使用多屏幕优化和主窗口位置
+            if main_window_position:
+                window_position = self.position_manager.get_switcher_dialog_position(
+                    dynamic_window_size, main_window_position
+                )
+            else:
+                # 回退到基于鼠标位置的多屏幕计算
+                window_position = self.screen_helper.get_optimal_window_position_multiscreen(dynamic_window_size)
             
             # 创建窗口布局
             layout = self._create_layout()

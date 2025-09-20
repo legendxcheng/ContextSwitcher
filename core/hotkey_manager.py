@@ -60,7 +60,7 @@ class HotkeyManager:
         # 初始化热键组合
         self._initialize_hotkey_combinations()
         
-        print("✓ 热键管理器初始化完成")
+        print("[OK] 热键管理器初始化完成")
     
     def set_main_window(self, main_window):
         """设置主窗口引用，用于线程安全的事件通信
@@ -69,7 +69,7 @@ class HotkeyManager:
             main_window: 主窗口实例（具有write_event_value方法）
         """
         self.main_window = main_window
-        print("✓ 热键管理器已设置主窗口引用")
+        print("[OK] 热键管理器已设置主窗口引用")
     
     def _initialize_hotkey_combinations(self):
         """初始化热键组合 - 仅支持任务切换器热键"""
@@ -102,11 +102,11 @@ class HotkeyManager:
                 "type": "switcher"
             }
             
-            print(f"✓ 已配置任务切换器热键: {switcher_hotkey_name}")
+            print(f"[OK] 已配置任务切换器热键: {switcher_hotkey_name}")
         else:
-            print("⚠️ 任务切换器热键已禁用")
+            print("[WARN] 任务切换器热键已禁用")
         
-        print(f"✓ 热键配置完成，共 {len(self.hotkey_combinations)} 个热键组合")
+        print(f"[OK] 热键配置完成，共 {len(self.hotkey_combinations)} 个热键组合")
     
     def start(self) -> bool:
         """启动热键监听
@@ -133,7 +133,7 @@ class HotkeyManager:
             self.listener.start()
             self.running = True
             
-            print("✓ 热键监听器已启动")
+            print("[OK] 热键监听器已启动")
             
             # 显示注册的热键
             for hotkey_name, hotkey_info in self.hotkey_combinations.items():
@@ -158,7 +158,7 @@ class HotkeyManager:
             try:
                 self.listener.stop()
                 self.listener = None
-                print("✓ 热键监听器已停止")
+                print("[OK] 热键监听器已停止")
             except Exception as e:
                 print(f"停止热键监听器时出错: {e}")
         
@@ -299,7 +299,7 @@ class HotkeyManager:
                 if self.main_window and hasattr(self.main_window, 'write_event_value'):
                     try:
                         self.main_window.write_event_value('-HOTKEY_TRIGGERED-', hotkey_name)
-                        print("✓ 热键事件已发送到主线程")
+                        print("[OK] 热键事件已发送到主线程")
                     except Exception as e:
                         print(f"发送热键事件失败: {e}")
                         # 线程安全的错误传递
@@ -310,17 +310,17 @@ class HotkeyManager:
                                 pass  # 避免递归错误
                         # 备用方案：使用原有回调（但不安全）
                         if self.on_switcher_triggered:
-                            print("⚠️ 使用备用回调方案（可能不安全）")
+                            print("[WARN] 使用备用回调方案（可能不安全）")
                             self.on_switcher_triggered()
                 else:
                     # 备用方案：使用原有回调（但可能不安全）
-                    print("⚠️ 主窗口未设置，使用备用回调方案")
+                    print("[WARN] 主窗口未设置，使用备用回调方案")
                     if self.on_switcher_triggered:
                         self.on_switcher_triggered()
                     else:
-                        print("⚠️ 切换器回调未设置")
+                        print("[WARN] 切换器回调未设置")
             else:
-                print(f"⚠️ 未知的热键类型: {hotkey_type}")
+                print(f"[WARN] 未知的热键类型: {hotkey_type}")
                 
         except Exception as e:
             print(f"处理热键失败: {e}")
@@ -389,7 +389,7 @@ class HotkeyManager:
             if was_running and self.enabled:
                 self.start()
             
-            print("✓ 热键配置已重新加载")
+            print("[OK] 热键配置已重新加载")
             
         except Exception as e:
             print(f"重新加载热键配置失败: {e}")
@@ -401,7 +401,7 @@ class HotkeyManager:
             self.hotkey_combinations.clear()
             self.pressed_keys.clear()
             
-            print("✓ 热键管理器已清理")
+            print("[OK] 热键管理器已清理")
             
         except Exception as e:
             print(f"清理热键管理器失败: {e}")

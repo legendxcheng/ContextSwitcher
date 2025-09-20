@@ -1,29 +1,9 @@
 {
   "permissions": {
     "allow": [
-      "Bash(grep:*)",
-      "Bash(sed:*)",
-      "WebFetch(domain:github.com)",
-      "WebFetch(domain:pypi.org)",
-      "Bash(mkdir:*)",
-      "Bash(touch:*)",
-      "Bash(python test:*)",
-      "Bash(python:*)",
-      "Bash(pip install:*)",
-      "Bash(pip3 list:*)",
-      "Bash(ls:*)",
-      "Bash(rg:*)",
-      "WebFetch(domain:freesimplegui.readthedocs.io)",
-      "Bash(git add:*)",
-      "Bash(git config:*)",
-      "Bash(git commit:*)",
-      "Bash(find:*)",
-      "Bash(git checkout:*)",
-      "Bash(git tag:*)",
-      "Bash(git merge:*)",
-      "Bash(copy:*)",
-      "Bash(cp:*)"
+      "Bash(sed:*)"
     ],
-    "deny": []
+    "deny": [],
+    "ask": []
   }
 }

@@ -24,6 +24,8 @@ from core.task_manager import TaskManager
 from gui.modern_config import ModernUIConfig
 from utils.config import get_config
 from utils.hotkey_conflict_detector import get_conflict_detector
+from utils.dialog_position_manager import get_dialog_position_manager
+from utils.popup_helper import PopupManager
 
 
 class SettingsDialog:
@@ -40,6 +42,12 @@ class SettingsDialog:
         self.task_manager = task_manager
         self.config = get_config()
         self.conflict_detector = get_conflict_detector()
+        
+        # 对话框位置管理器
+        self.position_manager = get_dialog_position_manager()
+        
+        # 弹窗管理器
+        self.popup_manager = PopupManager(parent_window)
         
         # 对话框窗口
         self.dialog_window: Optional[sg.Window] = None
@@ -61,6 +69,21 @@ class SettingsDialog:
         
         print("✓ 设置对话框初始化完成")
     
+    def _get_main_window_position(self) -> Optional[tuple]:
+        """获取主窗口位置
+        
+        Returns:
+            主窗口位置 (x, y) 或 None
+        """
+        try:
+            if self.parent_window and hasattr(self.parent_window, 'current_location'):
+                location = self.parent_window.current_location()
+                if location and len(location) == 2:
+                    return location
+        except Exception as e:
+            print(f"获取主窗口位置失败: {e}")
+        return None
+    
     def show_settings_dialog(self) -> bool:
         """显示设置对话框
         
@@ -73,6 +96,13 @@ class SettingsDialog:
         # 获取图标路径
         icon_path = ModernUIConfig._get_icon_path()
         
+        # 动态计算对话框位置
+        dialog_size = (480, 380)
+        main_window_position = self._get_main_window_position()
+        dialog_position = self.position_manager.get_settings_dialog_position(
+            dialog_size, main_window_position
+        )
+        
         self.dialog_window = sg.Window(
             "应用设置",
             layout,
@@ -80,8 +110,8 @@ class SettingsDialog:
             keep_on_top=True,
             finalize=True,
             resizable=False,
-            size=(480, 380),  # 调整为适中的高度
-            location=(300, 150),
+            size=dialog_size,
+            location=dialog_position,  # 使用动态计算的位置
             no_titlebar=False,
             alpha_channel=0.98,
             background_color="#202020",
@@ -328,10 +358,10 @@ class SettingsDialog:
             try:
                 idle_time = int(values["-IDLE_TIME-"])
                 if not (1 <= idle_time <= 1440):
-                    sg.popup("待机提醒时间必须在1-1440分钟范围内", title="设置错误")
+                    self.popup_manager.show_error("待机提醒时间必须在1-1440分钟范围内", "设置错误")
                     return False
             except ValueError:
-                sg.popup("请输入有效的数字", title="设置错误")
+                self.popup_manager.show_error("请输入有效的数字", "设置错误")
                 return False
             
             # 验证任务切换器设置
@@ -349,7 +379,7 @@ class SettingsDialog:
                 modifiers.append("win")
             
             if switcher_enabled and not modifiers:
-                sg.popup("启用任务切换器时，至少需要选择一个修饰键", title="设置错误")
+                self.popup_manager.show_error("启用任务切换器时，至少需要选择一个修饰键", "设置错误")
                 return False
             
             # 如果启用切换器，进行冲突检测
@@ -359,18 +389,18 @@ class SettingsDialog:
                 if conflict_result['severity'] == 'error':
                     # 严重冲突，不允许保存
                     conflicts_text = '\n'.join(conflict_result['conflicts'])
-                    sg.popup(f"检测到严重冲突，无法保存:\n\n{conflicts_text}", title="快捷键冲突")
+                    self.popup_manager.show_error(f"检测到严重冲突，无法保存:\n\n{conflicts_text}", "快捷键冲突")
                     return False
                 elif conflict_result['severity'] == 'warning':
                     # 警告级冲突，询问用户是否继续
                     conflicts_text = '\n'.join(conflict_result['conflicts'])
                     suggestions_text = '\n'.join(conflict_result['suggestions'][:2])
                     
-                    result = sg.popup_yes_no(
+                    result = self.popup_manager.show_question(
                         f"检测到潜在冲突:\n\n{conflicts_text}\n\n建议:\n{suggestions_text}\n\n是否继续保存此设置?",
-                        title="快捷键冲突警告"
+                        "快捷键冲突警告"
                     )
-                    if result != "Yes":
+                    if not result:
                         return False
             
             # 保存设置
@@ -378,7 +408,7 @@ class SettingsDialog:
             
         except Exception as e:
             print(f"验证设置失败: {e}")
-            sg.popup(f"保存设置失败: {e}", title="错误")
+            self.popup_manager.show_error(f"保存设置失败: {e}", "错误")
             return False
     
     def _apply_new_settings(self, idle_time: int, switcher_enabled: bool, 
@@ -391,7 +421,7 @@ class SettingsDialog:
             # 创建配置备份
             backup_success = self._create_settings_backup()
             if not backup_success:
-                sg.popup("无法创建配置备份，操作取消", title="错误")
+                self.popup_manager.show_error("无法创建配置备份，操作取消", "错误")
                 return False
             
             # 更新配置
@@ -416,7 +446,7 @@ class SettingsDialog:
             print(f"❌ 应用设置失败: {e}")
             # 尝试回滚
             self._restore_settings_backup()
-            sg.popup(f"设置保存失败，已恢复原设置: {e}", title="错误")
+            self.popup_manager.show_error(f"设置保存失败，已恢复原设置: {e}", "错误")
             return False
     
     def _create_settings_backup(self) -> bool:

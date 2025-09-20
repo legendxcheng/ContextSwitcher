@@ -59,7 +59,7 @@ class SmartRebindManager:
         self.AUTO_REBIND_THRESHOLD = 0.9  # 90%相似度自动绑定
         self.SUGGEST_THRESHOLD = 0.7      # 70%相似度提供建议
         
-        print("✓ 智能重新绑定管理器初始化完成")
+        print("[OK] 智能重新绑定管理器初始化完成")
     
     def detect_invalid_windows(self, task: Task) -> List[BoundWindow]:
         """检测任务中的失效窗口

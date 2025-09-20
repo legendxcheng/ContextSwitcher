@@ -15,6 +15,8 @@ except ImportError:
     print("运行: pip install FreeSimpleGUI")
     raise
 
+from utils.popup_helper import PopupManager
+
 
 class IEventHandler(ABC):
     """事件处理器接口"""
@@ -64,6 +66,9 @@ class EventController(IEventHandler):
         """
         self.task_manager = task_manager
         self.window_actions = window_actions
+        
+        # 弹窗管理器
+        self.popup_manager = PopupManager(window_actions.get_window())
         
         # 拖拽状态跟踪
         self.window_was_dragged = False
@@ -156,14 +161,14 @@ class EventController(IEventHandler):
         try:
             selected_rows = values.get("-TASK_TABLE-", [])
             if not selected_rows:
-                sg.popup("请先选择要编辑的任务", title="提示")
+                self.popup_manager.show_message("请先选择要编辑的任务", "提示")
                 return
             
             task_index = selected_rows[0]
             task = self.task_manager.get_task_by_index(task_index)
             
             if not task:
-                sg.popup("任务不存在", title="错误")
+                self.popup_manager.show_error("任务不存在", "错误")
                 return
             
             from gui.task_dialog import TaskDialog
@@ -185,28 +190,28 @@ class EventController(IEventHandler):
         try:
             selected_rows = values.get("-TASK_TABLE-", [])
             if not selected_rows:
-                sg.popup("请先选择要删除的任务", title="提示")
+                self.popup_manager.show_message("请先选择要删除的任务", "提示")
                 return
             
             task_index = selected_rows[0]
             task = self.task_manager.get_task_by_index(task_index)
             
             if not task:
-                sg.popup("任务不存在", title="错误")
+                self.popup_manager.show_error("任务不存在", "错误")
                 return
             
             # 确认删除
-            result = sg.popup_yes_no(
+            result = self.popup_manager.show_question(
                 f"确定要删除任务 '{task.name}' 吗？\\n\\n此操作无法撤销。",
-                title="确认删除"
+                "确认删除"
             )
             
-            if result == "Yes":
+            if result:
                 if self.task_manager.remove_task(task.id):
                     self.window_actions.update_display()
                     self.window_actions.set_status("任务删除成功", 3000)
                 else:
-                    sg.popup("删除任务失败", title="错误")
+                    self.popup_manager.show_error("删除任务失败", "错误")
             
         except Exception as e:
             print(f"删除任务失败: {e}")
@@ -244,10 +249,10 @@ class EventController(IEventHandler):
                 print("✓ 设置已保存并应用")
             
         except ImportError:
-            sg.popup("设置功能开发中...", title="设置")
+            self.popup_manager.show_message("设置功能开发中...", "设置")
         except Exception as e:
             print(f"打开设置失败: {e}")
-            sg.popup(f"打开设置失败: {e}", title="错误")
+            self.popup_manager.show_error(f"打开设置失败: {e}", "错误")
     
     def _handle_table_selection(self, values: Dict[str, Any]):
         """处理表格选择事件"""

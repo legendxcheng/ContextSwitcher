@@ -4,107 +4,110 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project Overview
 
-ContextSwitcher is a Windows desktop utility designed for developers who work with multiple parallel tasks. It functions as a "second brain" for developers, allowing them to manage task contexts and quickly switch between associated application windows using global hotkeys.
+ContextSwitcher is a Windows desktop application designed for developers to manage multiple tasks and their associated window contexts. It allows binding multiple windows to tasks and switching between task contexts using global hotkeys (Ctrl+Alt+1-9).
 
-## Core Architecture
+## Commands
 
-This is a Windows-specific Python application that serves as a task and window context manager. The main components include:
+### Build and Development
+- **Build executable**: `build.bat` - Creates a standalone executable using PyInstaller
+- **Manual build**: `pyinstaller --onefile --windowed --name="ContextSwitcher" --icon=icon.ico main.py`
+- **Run application**: `python main.py`
+- **Install dependencies**: `pip install -r requirements.txt`
 
-- **Task Management**: Users can create, edit, and delete development tasks
-- **Multi-Window Binding**: Each task can be bound to multiple application windows (VS Code, browser, etc.)
-- **Global Hotkey System**: Ctrl+Alt+[1-9] shortcuts to instantly switch to tasks and their bound windows
-- **Data Persistence**: Task lists with window bindings are saved locally in `%APPDATA%/tasks.json`
+### Testing
+- Run individual test files: `python test_*.py` (各种测试脚本)
+- Main verification scripts:
+  - `python verify_simple.py` - 基本功能验证
+  - `python verify_explorer_feature.py` - Explorer窗口功能验证
 
-## Technology Stack
+## Architecture
 
-- **Language**: Python 3.11+
-- **GUI Framework**: FreeSimpleGUI (free alternative to PySimpleGUI, no licensing restrictions)
-- **Windows Integration**: pywin32 for Windows API calls
-- **Global Hotkeys**: pynput library (integrates well with FreeSimpleGUI)
-- **System Tray**: FreeSimpleGUIWx for system tray functionality (optional)
-- **Data Storage**: JSON files in %APPDATA%
+### Core Components (core/)
+- **TaskManager** (`task_manager.py`): 核心任务管理，处理任务的创建、编辑、删除和多窗口绑定
+- **WindowManager** (`window_manager.py`): Windows API封装，管理窗口枚举、激活、状态检测
+- **HotkeyManager** (`hotkey_manager.py`): 全局热键注册和处理 (Ctrl+Alt+1-9)
+- **SmartRebindManager** (`smart_rebind_manager.py`): 智能重新绑定，处理窗口失效后的重新绑定
+- **TaskStatusManager** (`task_status_manager.py`): 任务状态管理 (TODO, IN_PROGRESS, BLOCKED, REVIEW, COMPLETED, PAUSED)
+- **ExplorerHelper** (`explorer_helper.py`): Explorer窗口的特殊处理，支持路径获取和恢复
 
-## Key Features
+### GUI Components (gui/)
+- **MainWindow** (`main_window.py`): 主窗口界面，实现多个接口的架构设计
+- **TaskSwitcherDialog** (`task_switcher_dialog.py`): 热键触发的任务切换器弹窗
+- **TaskDialog** (`task_dialog.py`): 任务创建和编辑对话框
+- **SettingsDialog** (`settings_dialog.py`): 应用设置对话框
+- **WindowSelector** (`window_selector.py`): 窗口选择器，用于窗口绑定
+- GUI架构采用接口分离设计:
+  - **EventController**: 事件处理控制器
+  - **WindowStateManager**: 窗口状态管理
+  - **NotificationController**: 通知控制器
+  - **UILayoutManager**: 布局管理器
+  - **ActionDispatcher**: 动作分发器
 
-### Core Features (v1.0)
-1. **Always-on-Top Window**: Main interface stays visible during development
-2. **Multi-Window Task Binding**: Link development tasks to multiple application windows
-3. **Quick Context Switching**: Global hotkeys update timestamps and activate bound windows
-4. **Graceful Degradation**: Handles closed/invalid windows elegantly
-5. **Local Data Storage**: Persists task data between sessions
+### Utilities (utils/)
+- **DataStorage** (`data_storage.py`): JSON数据持久化
+- **ScreenHelper** (`screen_helper.py`): 屏幕相关工具函数
+- **DialogPositionManager** (`dialog_position_manager.py`): 对话框位置管理
+- **Config** (`config.py`): 配置管理
+- **ToastManager** (`toast_manager.py`): Windows Toast通知
 
-### Experimental Features (Future)
-- **Virtual Desktop Integration**: Create dedicated virtual desktops for tasks (HIGH RISK - depends on undocumented Windows APIs)
+### Key Features
+- **多窗口绑定**: 一个任务可以绑定多个窗口，支持Explorer窗口的路径记忆
+- **全局热键**: Ctrl+Alt+1-9 快速切换任务上下文
+- **智能重绑定**: 当绑定的窗口失效时，自动提示重新绑定到相似窗口
+- **任务状态管理**: 支持多种任务状态跟踪
+- **窗口状态恢复**: 记忆并恢复窗口位置和大小
+- **Explorer集成**: 特殊支持Explorer窗口的文件夹路径记忆和恢复
 
-## Development Context
+## Project Structure Notes
 
-- **Target Platform**: Windows 10/11 (version 1903+ for virtual desktop features)
-- **UI Requirements**: Minimal, high information density interface
-- **Performance Goals**: <5s startup (Python), <2% CPU, <150MB RAM, <100ms hotkey response
-- **User Experience**: Zero learning curve, hotkey-driven workflow
+### Main Entry Point
+`main.py` 是应用程序入口，创建 ContextSwitcher 类实例，按顺序初始化所有组件：
+1. DataStorage (数据存储)
+2. TaskManager (任务管理器)
+3. HotkeyManager (热键管理器)
+4. SmartRebindManager (智能重新绑定管理器)
+5. TaskStatusManager (任务状态管理器)
+6. MainWindow (主窗口)
+7. TaskSwitcherDialog (任务切换器)
 
-## Project Requirements (from PRD)
+### GUI Architecture
+主窗口采用接口分离的架构设计，MainWindow类实现多个接口：
+- IWindowActions, IWindowProvider: 窗口操作接口
+- INotificationProvider: 通知接口  
+- ILayoutProvider: 布局接口
+- IActionProvider: 动作接口
 
-The application must implement a table-based interface showing:
-- Task names
-- Bound window information (multiple windows per task)
-- Last accessed timestamps
+### Data Model
+- **Task**: 任务数据类，包含ID、名称、描述、状态、绑定窗口列表等
+- **BoundWindow**: 绑定窗口信息，包含句柄、标题、进程名、绑定时间、Explorer路径等
+- **TaskStatus**: 任务状态枚举 (TODO, IN_PROGRESS, BLOCKED, REVIEW, COMPLETED, PAUSED)
 
-Core functionality includes adding/editing/deleting tasks, binding them to multiple windows, and using Ctrl+Alt+[1-9] shortcuts for instant context switching.
+### Threading and Safety
+- GUI运行在主线程
+- 热键监听运行在独立线程
+- 使用线程安全的通信机制在热键线程和GUI线程间传递事件
+- 窗口操作通过消息队列进行线程安全处理
 
-## API Risk Assessment
-
-### High Risk Components
-- **Virtual Desktop APIs**: pyvda library depends on undocumented Windows COM interfaces that frequently break with Windows updates
-- **global-hotkeys**: Limited maintenance, keyboard layout compatibility issues
-
-### Low Risk Components  
-- **pywin32**: Mature, stable library with active maintenance
-- **FreeSimpleGUI**: Open-source fork of PySimpleGUI with LGPL license, actively maintained
-- **pynput**: Stable library for global hotkey handling
-
-## Development Strategy
-
-1. **Phase 1**: Implement core window management without virtual desktop dependency
-2. **Phase 2**: Add virtual desktop support as optional experimental feature
-3. **Phase 3**: Implement comprehensive error handling and fallback mechanisms
-
-## Common Development Commands
-
-### Installation
-```bash
-pip install FreeSimpleGUI
-pip install pywin32
-pip install pynput
-pip install FreeSimpleGUIWx  # Optional, for system tray
-```
-
-### Development
-- `python main.py` - Run application
-- `python -m pytest tests/` - Run tests (when implemented)
-
-### Package for Distribution
-```bash
-pip install pyinstaller
-pyinstaller --onefile --windowed main.py
-```
+### Dependencies
+- **FreeSimpleGUI**: GUI框架
+- **pywin32**: Windows API访问
+- **pynput**: 全局热键监听
+- **Pillow**: 图像处理（图标转换）
+- **win10toast**: Windows Toast通知
 
 ## Development Notes
 
-- **GUI Framework**: Use FreeSimpleGUI instead of PySimpleGUI (avoids licensing issues)
-- **Global Hotkeys**: Use pynput library for system-wide hotkey detection
-- **Always-on-Top**: Use `keep_on_top=True` parameter in FreeSimpleGUI windows
-- **System Tray**: Optional FreeSimpleGUIWx for system tray integration
-- **Prioritize stability** over advanced features
-- **Implement comprehensive error handling** for Windows API calls
-- **Consider virtual desktop functionality** as experimental/optional
-- **Test thoroughly** across different Windows versions and updates
+### Windows-Only Application
+此应用专为Windows平台设计，大量使用Windows API和平台特定功能。
 
-## FreeSimpleGUI Specific Notes
+### Configuration System
+使用 `utils/config.py` 进行配置管理，支持窗口配置、热键配置等。
 
-- FreeSimpleGUI is the recommended replacement for PySimpleGUI (no licensing restrictions)
-- Same API as PySimpleGUI 4.x, so existing tutorials apply
-- Table component works well for task list display
-- Built-in file dialogs for multi-window selection
-- Easy integration with global hotkey libraries
+### Testing Strategy
+项目包含多个测试和验证脚本：
+- 功能验证脚本 (verify_*.py)
+- 单元测试脚本 (test_*.py)
+- UI修复和线程安全测试
 
+### Build System
+使用PyInstaller打包成单文件可执行程序，配置文件为 `ContextSwitcher.spec`。

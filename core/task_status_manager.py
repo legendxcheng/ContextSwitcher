@@ -45,9 +45,9 @@ class TaskStatusManager:
     STATUS_ICONS = {
         TaskStatus.TODO: "○",
         TaskStatus.IN_PROGRESS: "▶",
-        TaskStatus.BLOCKED: "⚠",
+        TaskStatus.BLOCKED: "[WARN]",
         TaskStatus.REVIEW: "👁",
-        TaskStatus.COMPLETED: "✓",
+        TaskStatus.COMPLETED: "[OK]",
         TaskStatus.PAUSED: "⏸"
     }
     
@@ -80,7 +80,7 @@ class TaskStatusManager:
         self.task_manager = task_manager
         self.status_history: List[StatusChangeRecord] = []
         
-        print("✓ 任务状态管理器初始化完成")
+        print("[OK] 任务状态管理器初始化完成")
     
     def change_task_status(self, task_id: str, new_status: TaskStatus, 
                           reason: str = "", user_comment: str = "") -> bool:
@@ -133,7 +133,7 @@ class TaskStatusManager:
         if self.task_manager.on_task_updated:
             self.task_manager.on_task_updated(task)
         
-        print(f"✓ 任务状态已更新: {task.name} -> {self.STATUS_NAMES[new_status]}")
+        print(f"[OK] 任务状态已更新: {task.name} -> {self.STATUS_NAMES[new_status]}")
         return True
     
     def is_transition_allowed(self, current_status: TaskStatus, new_status: TaskStatus) -> bool:

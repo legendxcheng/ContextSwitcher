@@ -107,6 +107,37 @@ class ModernUIConfig:
             return None
     
     @classmethod
+    def get_dialog_window_config_with_position(cls, title: str, size: Tuple[int, int], 
+                                             main_window_position: Tuple[int, int] = None) -> Dict[str, Any]:
+        """获取带位置计算的对话框窗口配置
+        
+        Args:
+            title: 对话框标题
+            size: 对话框尺寸 (width, height)
+            main_window_position: 主窗口位置 (x, y)，用于计算对话框位置
+            
+        Returns:
+            完整的窗口配置字典
+        """
+        # 获取基础配置
+        config = cls.get_dialog_window_config(title, size)
+        
+        # 计算对话框位置
+        if main_window_position:
+            try:
+                from utils.dialog_position_manager import get_dialog_position_manager
+                position_manager = get_dialog_position_manager()
+                dialog_position = position_manager.get_dialog_position(
+                    size, main_window_position, strategy="screen_center"
+                )
+                config['location'] = dialog_position
+            except Exception as e:
+                print(f"计算对话框位置失败: {e}")
+                # 保持原有配置，不设置location
+        
+        return config
+    
+    @classmethod
     def get_dialog_window_config(cls, title: str, size: Tuple[int, int]) -> Dict[str, Any]:
         """获取对话框窗口配置"""
         # 获取图标路径
@@ -192,3 +223,125 @@ class ModernUIConfig:
             sbar_background_color=cls.COLORS['background']  # 滚动条背景色
         )
         return table
+    
+    @classmethod
+    def create_message_dialog(cls, message: str, title: str = "提示", 
+                            dialog_type: str = "info", 
+                            main_window_position: Tuple[int, int] = None) -> bool:
+        """创建消息对话框（替代sg.popup）
+        
+        Args:
+            message: 消息内容
+            title: 对话框标题
+            dialog_type: 对话框类型 ("info", "warning", "error", "question")
+            main_window_position: 主窗口位置，用于计算对话框位置
+            
+        Returns:
+            用户选择结果（对于question类型）
+        """
+        try:
+            import FreeSimpleGUI as sg
+            
+            # 根据类型设置颜色和图标
+            if dialog_type == "error":
+                icon = "❌"
+                text_color = cls.COLORS['error']
+            elif dialog_type == "warning":
+                icon = "⚠️"
+                text_color = cls.COLORS['warning']
+            elif dialog_type == "question":
+                icon = "❓"
+                text_color = cls.COLORS['primary']
+            else:  # info
+                icon = "ℹ️"
+                text_color = cls.COLORS['text']
+            
+            # 创建布局
+            layout = [
+                [sg.Text(f"{icon} {message}", font=cls.FONTS['body'], 
+                        text_color=text_color, justification='center')],
+                [sg.Text("")],  # 空行
+            ]
+            
+            # 根据类型添加按钮
+            if dialog_type == "question":
+                button_row = [
+                    sg.Push(),
+                    sg.Button("是", key="-YES-", size=(6, 1), 
+                             button_color=(cls.COLORS['text'], cls.COLORS['success'])),
+                    sg.Button("否", key="-NO-", size=(6, 1),
+                             button_color=(cls.COLORS['text'], cls.COLORS['error'])),
+                    sg.Push()
+                ]
+            else:
+                button_row = [
+                    sg.Push(),
+                    sg.Button("确定", key="-OK-", size=(8, 1),
+                             button_color=(cls.COLORS['text'], cls.COLORS['primary'])),
+                    sg.Push()
+                ]
+            
+            layout.append(button_row)
+            
+            # 计算对话框尺寸和位置
+            dialog_size = (400, 150)
+            dialog_position = None
+            
+            if main_window_position:
+                try:
+                    from utils.dialog_position_manager import get_dialog_position_manager
+                    position_manager = get_dialog_position_manager()
+                    dialog_position = position_manager.get_popup_position(
+                        dialog_size, main_window_position
+                    )
+                except Exception as e:
+                    print(f"计算弹窗位置失败: {e}")
+            
+            # 创建对话框配置
+            window_config = {
+                'title': title,
+                'modal': True,
+                'keep_on_top': True,
+                'finalize': True,
+                'resizable': False,
+                'size': dialog_size,
+                'no_titlebar': False,
+                'alpha_channel': 0.98,
+                'background_color': cls.COLORS['background'],
+                'margins': (15, 12),
+                'element_padding': (5, 4)
+            }
+            
+            if dialog_position:
+                window_config['location'] = dialog_position
+            
+            # 获取图标路径
+            icon_path = cls._get_icon_path()
+            if icon_path:
+                window_config['icon'] = icon_path
+            
+            # 创建并显示对话框
+            dialog = sg.Window(layout=layout, **window_config)
+            
+            try:
+                while True:
+                    event, values = dialog.read()
+                    
+                    if event in (sg.WIN_CLOSED, "-OK-"):
+                        return True
+                    elif event == "-YES-":
+                        return True
+                    elif event == "-NO-":
+                        return False
+                        
+            finally:
+                dialog.close()
+                
+        except Exception as e:
+            print(f"创建消息对话框失败: {e}")
+            # 回退到标准弹窗
+            if dialog_type == "question":
+                return sg.popup_yes_no(message, title=title) == "Yes"
+            else:
+                sg.popup(message, title=title)
+                return True

@@ -29,7 +29,7 @@ class ScreenHelper:
         self.cache_time = 0
         self.cache_duration = 5.0  # 缓存5秒
         
-        print("✓ 屏幕辅助工具初始化完成")
+        print("[OK] 屏幕辅助工具初始化完成")
     
     def get_cursor_position(self) -> Tuple[int, int]:
         """获取鼠标当前位置
@@ -293,6 +293,118 @@ class ScreenHelper:
         except:
             return False
     
+    def get_window_screen_position(self, window_position: Tuple[int, int]) -> Optional[dict]:
+        """获取指定窗口位置所在的屏幕信息
+        
+        Args:
+            window_position: 窗口位置 (x, y)
+            
+        Returns:
+            屏幕信息字典，如果失败则返回None
+        """
+        try:
+            # 获取窗口中心点
+            window_x, window_y = window_position
+            center_point = (window_x + 50, window_y + 25)  # 估算窗口中心点
+            
+            return self.get_monitor_from_point(center_point)
+            
+        except Exception as e:
+            print(f"获取窗口屏幕位置失败: {e}")
+            return None
+    
+    def get_optimal_dialog_position(self, dialog_size: Tuple[int, int], 
+                                  main_window_position: Tuple[int, int] = None) -> Tuple[int, int]:
+        """为对话框计算最佳显示位置
+        
+        Args:
+            dialog_size: 对话框尺寸 (width, height)
+            main_window_position: 主窗口位置 (x, y)，如果为None则使用鼠标位置
+            
+        Returns:
+            对话框左上角坐标 (x, y)
+        """
+        try:
+            dialog_width, dialog_height = dialog_size
+            
+            # 如果提供了主窗口位置，使用主窗口所在屏幕
+            if main_window_position:
+                monitor_info = self.get_window_screen_position(main_window_position)
+                
+                if monitor_info:
+                    # 使用主窗口所在屏幕的工作区域
+                    work_rect = monitor_info['work_rect']
+                    work_left, work_top, work_right, work_bottom = work_rect
+                    
+                    work_width = work_right - work_left
+                    work_height = work_bottom - work_top
+                    
+                    # 在主窗口屏幕中央显示对话框
+                    dialog_x = work_left + (work_width - dialog_width) // 2
+                    dialog_y = work_top + (work_height - dialog_height) // 2
+                    
+                    # 确保对话框完全在工作区域内
+                    dialog_x = max(work_left, min(dialog_x, work_right - dialog_width))
+                    dialog_y = max(work_top, min(dialog_y, work_bottom - dialog_height))
+                    
+                    print(f"对话框定位: 主窗口屏幕({work_left}, {work_top}, {work_right}, {work_bottom}) -> 对话框({dialog_x}, {dialog_y})")
+                    
+                    return (dialog_x, dialog_y)
+            
+            # 回退到多屏幕模式（基于鼠标位置）
+            return self.get_optimal_window_position_multiscreen(dialog_size)
+            
+        except Exception as e:
+            print(f"计算对话框位置失败: {e}")
+            # 最终回退到单屏幕模式
+            return self.get_optimal_window_position(dialog_size)
+    
+    def get_main_window_center_offset(self, dialog_size: Tuple[int, int], 
+                                    main_window_position: Tuple[int, int], 
+                                    main_window_size: Tuple[int, int]) -> Tuple[int, int]:
+        """计算相对于主窗口中心的对话框位置
+        
+        Args:
+            dialog_size: 对话框尺寸 (width, height)
+            main_window_position: 主窗口位置 (x, y)
+            main_window_size: 主窗口尺寸 (width, height)
+            
+        Returns:
+            对话框左上角坐标 (x, y)
+        """
+        try:
+            dialog_width, dialog_height = dialog_size
+            main_x, main_y = main_window_position
+            main_width, main_height = main_window_size
+            
+            # 计算主窗口中心点
+            main_center_x = main_x + main_width // 2
+            main_center_y = main_y + main_height // 2
+            
+            # 计算对话框左上角位置（相对于主窗口中心）
+            dialog_x = main_center_x - dialog_width // 2
+            dialog_y = main_center_y - dialog_height // 2
+            
+            # 获取主窗口所在屏幕的工作区域
+            monitor_info = self.get_window_screen_position(main_window_position)
+            
+            if monitor_info:
+                work_rect = monitor_info['work_rect']
+                work_left, work_top, work_right, work_bottom = work_rect
+                
+                # 确保对话框在屏幕边界内
+                dialog_x = max(work_left, min(dialog_x, work_right - dialog_width))
+                dialog_y = max(work_top, min(dialog_y, work_bottom - dialog_height))
+            
+            print(f"相对主窗口定位: 主窗口中心({main_center_x}, {main_center_y}) -> 对话框({dialog_x}, {dialog_y})")
+            
+            return (dialog_x, dialog_y)
+            
+        except Exception as e:
+            print(f"计算相对位置失败: {e}")
+            # 回退到默认计算
+            return self.get_optimal_dialog_position(dialog_size, main_window_position)
+
     def clear_cache(self):
         """清除缓存的屏幕信息"""
         self.cached_screen_info = None

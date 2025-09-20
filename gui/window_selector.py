@@ -18,6 +18,7 @@ except ImportError:
     raise
 
 from core.window_manager import WindowManager, WindowInfo
+from utils.dialog_position_manager import get_dialog_position_manager
 
 
 class WindowSelector:
@@ -32,6 +33,9 @@ class WindowSelector:
         self.window_manager = window_manager
         self.last_refresh = 0
         self.refresh_interval = 5.0  # 5秒自动刷新间隔
+        
+        # 对话框位置管理器
+        self.position_manager = get_dialog_position_manager()
         
         # 选择状态
         self.selected_windows: Set[int] = set()  # 存储选中的窗口句柄
@@ -72,6 +76,19 @@ class WindowSelector:
         # 创建对话框布局
         layout = self._create_selector_layout(multiple)
         
+        # 计算对话框位置
+        dialog_size = (800, 600)
+        main_window_position = None
+        if parent_window and hasattr(parent_window, 'current_location'):
+            try:
+                main_window_position = parent_window.current_location()
+            except:
+                pass
+        
+        dialog_position = self.position_manager.get_selector_dialog_position(
+            dialog_size, main_window_position
+        )
+        
         # 创建对话框窗口
         dialog = sg.Window(
             title,
@@ -80,7 +97,8 @@ class WindowSelector:
             keep_on_top=True,
             finalize=True,
             resizable=True,
-            size=(800, 600),
+            size=dialog_size,
+            location=dialog_position,  # 使用动态计算的位置
             return_keyboard_events=True  # 启用键盘事件
         )
         
