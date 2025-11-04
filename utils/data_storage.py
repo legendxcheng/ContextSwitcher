@@ -78,12 +78,44 @@ class DataStorage:
             print(f"[OK] 已保存 {len(tasks_data)} 个任务到 {self.tasks_file}")
             return True
             
-        except Exception as e:
-            print(f"保存任务失败: {e}")
+        except PermissionError as e:
+            print(f"⚠️ 保存任务失败: 权限不足")
+            print(f"   文件路径: {self.tasks_file}")
+            print(f"   错误详情: {e}")
             # 清理临时文件
             temp_file = self.tasks_file.with_suffix('.tmp')
             if temp_file.exists():
-                temp_file.unlink()
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+            return False
+            
+        except OSError as e:
+            # 捕获磁盘空间不足等系统错误
+            print(f"⚠️ 保存任务失败: 系统错误（可能是磁盘空间不足）")
+            print(f"   文件路径: {self.tasks_file}")
+            print(f"   错误详情: {e}")
+            # 清理临时文件
+            temp_file = self.tasks_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+            return False
+            
+        except Exception as e:
+            print(f"⚠️ 保存任务失败: 未知错误")
+            print(f"   错误类型: {type(e).__name__}")
+            print(f"   错误详情: {e}")
+            # 清理临时文件
+            temp_file = self.tasks_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
             return False
     
     def load_tasks(self) -> List[Dict[str, Any]]:

@@ -101,8 +101,8 @@ class ContextSwitcher:
             self.task_status_manager = TaskStatusManager(self.task_manager)
             print("  [OK] 任务状态管理器")
             
-            # 初始化主窗口
-            self.main_window = MainWindow(self.task_manager)
+            # 初始化主窗口（传递 data_storage 以支持自动保存）
+            self.main_window = MainWindow(self.task_manager, self.data_storage)
             self.main_window.smart_rebind_manager = self.smart_rebind_manager
             self.main_window.task_status_manager = self.task_status_manager
             self.main_window.on_window_closed = self.cleanup
@@ -288,8 +288,9 @@ class ContextSwitcher:
                 self.hotkey_manager.cleanup()
                 print("[OK] 热键已注销")
             
-            # 保存数据
+            # 保存数据（最终保存，作为双重保险）
             if self.data_storage and self.task_manager:
+                print("[INFO] 执行退出时的最终保存（双重保险）...")
                 tasks = self.task_manager.get_all_tasks()
                 if self.data_storage.save_tasks(tasks):
                     print("[OK] 数据已保存")

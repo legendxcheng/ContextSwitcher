@@ -11,8 +11,11 @@
 
 import time
 import threading
-from typing import List, Dict, Any, Optional, Callable
+from typing import List, Dict, Any, Optional, Callable, TYPE_CHECKING
 from datetime import datetime
+
+if TYPE_CHECKING:
+    from utils.data_storage import DataStorage
 
 try:
     import FreeSimpleGUI as sg
@@ -35,13 +38,15 @@ from gui.action_dispatcher import ActionDispatcher, IActionProvider
 class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayoutProvider, IActionProvider):
     """主窗口类"""
     
-    def __init__(self, task_manager: TaskManager):
+    def __init__(self, task_manager: TaskManager, data_storage: Optional['DataStorage'] = None):
         """初始化主窗口
         
         Args:
             task_manager: 任务管理器实例
+            data_storage: 数据存储管理器实例（可选）
         """
         self.task_manager = task_manager
+        self.data_storage = data_storage  # 保存数据存储引用
         self.config = get_config()
         self.smart_rebind_manager = None  # 将在主程序中设置
         self.task_status_manager = None  # 将在主程序中设置
@@ -195,6 +200,10 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
     def is_running(self) -> bool:
         """检查是否正在运行 - IActionProvider接口实现"""
         return self.running
+    
+    def get_data_storage(self):
+        """获取数据存储管理器 - IActionProvider接口实现"""
+        return self.data_storage
     
     def run(self):
         """运行主事件循环"""

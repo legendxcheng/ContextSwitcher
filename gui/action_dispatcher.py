@@ -63,6 +63,11 @@ class IActionProvider(ABC):
     def is_running(self) -> bool:
         """检查是否正在运行"""
         pass
+    
+    @abstractmethod
+    def get_data_storage(self):
+        """获取数据存储管理器"""
+        pass
 
 
 class ActionDispatcher(IActionDispatcher):
@@ -79,6 +84,11 @@ class ActionDispatcher(IActionDispatcher):
         # 状态管理
         self.preserved_selection = None
         self.status_clear_time = 0
+        
+        # 自动保存统计
+        self.auto_save_count = 0  # 自动保存次数
+        self.auto_save_fail_count = 0  # 失败次数
+        self.last_auto_save_time = 0  # 上次保存时间戳
         
         print("✓ 业务动作调度器初始化完成")
     
@@ -186,6 +196,9 @@ class ActionDispatcher(IActionDispatcher):
             if event_controller:
                 event_controller.set_preserved_selection(None)
             self.update_display()
+            
+            # 立即自动保存任务数据
+            self._auto_save_tasks()
     
     def on_task_switched(self, task: Task, index: int) -> None:
         """任务切换回调"""
@@ -224,11 +237,18 @@ class ActionDispatcher(IActionDispatcher):
     
     def get_status_info(self) -> dict:
         """获取状态信息（用于调试）"""
+        from datetime import datetime
+        
         return {
             "preserved_selection": self.preserved_selection,
             "status_clear_time": self.status_clear_time,
             "next_clear_in": max(0, self.status_clear_time - time.time()) if self.status_clear_time > 0 else 0,
-            "is_running": self.action_provider.is_running()
+            "is_running": self.action_provider.is_running(),
+            # 自动保存统计
+            "auto_save_count": self.auto_save_count,
+            "auto_save_fail_count": self.auto_save_fail_count,
+            "last_auto_save_time": datetime.fromtimestamp(self.last_auto_save_time).isoformat() if self.last_auto_save_time > 0 else "从未保存",
+            "auto_save_success_rate": f"{(self.auto_save_count / (self.auto_save_count + self.auto_save_fail_count) * 100):.1f}%" if (self.auto_save_count + self.auto_save_fail_count) > 0 else "N/A"
         }
     
     def force_update_display(self) -> None:
@@ -251,3 +271,61 @@ class ActionDispatcher(IActionDispatcher):
         self.preserved_selection = None
         self.status_clear_time = 0
         print("✓ 所有状态已清除")
+    
+    def _auto_save_tasks(self) -> bool:
+        """自动保存任务数据（线程安全）
+        
+        Returns:
+            是否成功保存
+        """
+        try:
+            # 获取数据存储管理器
+            data_storage = self.action_provider.get_data_storage()
+            
+            # 检查数据存储是否存在
+            if data_storage is None:
+                print("⚠️ [AutoSave] 数据存储管理器未初始化，跳过自动保存")
+                return False
+            
+            # 获取任务管理器
+            task_manager = self.action_provider.get_task_manager()
+            if task_manager is None:
+                print("⚠️ [AutoSave] 任务管理器未初始化，跳过自动保存")
+                return False
+            
+            # 获取所有任务
+            tasks = task_manager.get_all_tasks()
+            
+            # 记录开始时间（用于性能监控）
+            start_time = time.time()
+            
+            # 执行保存
+            print(f"[AutoSave] 检测到任务变更，准备自动保存 {len(tasks)} 个任务...")
+            success = data_storage.save_tasks(tasks)
+            
+            # 计算耗时
+            elapsed_ms = (time.time() - start_time) * 1000
+            
+            if success:
+                # 更新统计信息
+                self.auto_save_count += 1
+                self.last_auto_save_time = time.time()
+                
+                print(f"[AutoSave] ✓ 成功保存 {len(tasks)} 个任务（耗时 {elapsed_ms:.1f} ms）[总计: {self.auto_save_count} 次]")
+                return True
+            else:
+                # 更新失败统计
+                self.auto_save_fail_count += 1
+                
+                print(f"[AutoSave] ✗ 保存失败（耗时 {elapsed_ms:.1f} ms）[失败: {self.auto_save_fail_count} 次]")
+                # 通过状态栏提示用户
+                self.set_status("⚠️ 自动保存失败，请检查磁盘空间和权限", 5000)
+                return False
+                
+        except Exception as e:
+            print(f"[AutoSave] ✗ 自动保存异常: {e}")
+            import traceback
+            traceback.print_exc()
+            # 通过状态栏提示用户
+            self.set_status(f"⚠️ 自动保存异常: {str(e)}", 5000)
+            return False
