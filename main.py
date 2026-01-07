@@ -50,7 +50,7 @@ class ContextSwitcher:
     
     def __init__(self):
         """初始化应用"""
-        self.version = "1.0.0"
+        self.version = "1.2.0"  # v1.2.0: 智能窗口恢复 (Terminal/VS Code支持)
         self.app_name = "ContextSwitcher"
         
         # 核心组件 - 稍后导入
@@ -126,7 +126,7 @@ class ContextSwitcher:
         try:
             # 从JSON文件加载任务数据
             tasks_data = self.data_storage.load_tasks()
-            
+
             if tasks_data:
                 # 重建任务对象
                 from core.task_manager import Task
@@ -136,13 +136,22 @@ class ContextSwitcher:
                         self.task_manager.tasks.append(task)
                     except Exception as e:
                         print(f"加载任务失败 {task_data.get('name', 'Unknown')}: {e}")
-                
+
                 print(f"[OK] 已加载 {len(self.task_manager.tasks)} 个任务")
             else:
                 print("[OK] 无历史任务数据，从空白开始")
-            
+
+            # 加载时间追踪数据
+            from core.time_tracker import get_time_tracker
+            time_tracker = get_time_tracker()
+            self.data_storage.load_time_tracking(time_tracker)
+
+            # 更新任务名称映射
+            for task in self.task_manager.tasks:
+                time_tracker.task_names[task.id] = task.name
+
             return True
-            
+
         except Exception as e:
             print(f"[ERROR] 数据加载失败: {e}")
             return False
@@ -189,7 +198,7 @@ class ContextSwitcher:
                         main_window_position = self.main_window.window_state_manager.get_current_window_position()
                     except:
                         pass
-                
+
                 result = self.task_switcher.show(main_window_position)
                 if result:
                     print("✅ 任务切换器执行成功")
@@ -201,6 +210,18 @@ class ContextSwitcher:
             print(f"显示任务切换器失败: {e}")
             import traceback
             traceback.print_exc()
+
+    def _show_welcome_if_needed(self):
+        """如果是首次运行，显示欢迎引导"""
+        try:
+            from gui.welcome_dialog import WelcomeDialog
+            welcome = WelcomeDialog()
+            if welcome.should_show():
+                print("显示首次运行欢迎引导...")
+                welcome.show()
+                print("[OK] 欢迎引导完成")
+        except Exception as e:
+            print(f"显示欢迎引导失败: {e}")
     
     def run(self):
         """运行主程序"""
@@ -208,11 +229,14 @@ class ContextSwitcher:
             # 初始化组件
             if not self.initialize_components():
                 return False
-            
+
             # 加载数据
             if not self.load_data():
                 print("警告: 数据加载失败，将使用空数据启动")
-            
+
+            # 首次运行显示欢迎引导
+            self._show_welcome_if_needed()
+
             # 显示主窗口（创建窗口实例）
             print("启动主界面...")
             self.main_window.show()
@@ -277,28 +301,46 @@ class ContextSwitcher:
         """清理资源"""
         try:
             self.running = False
-            
+
+            # 结束当前任务的时间追踪会话
+            from core.time_tracker import get_time_tracker
+            time_tracker = get_time_tracker()
+            if time_tracker.current_session:
+                ended_session = time_tracker.end_session()
+                if ended_session and self.task_manager:
+                    # 更新任务的累计时间
+                    task = self.task_manager.get_task_by_id(ended_session.task_id)
+                    if task:
+                        task.total_time_seconds += ended_session.duration_seconds
+                print("[OK] 时间追踪会话已结束")
+
             # 清理任务切换器
             if self.task_switcher:
                 self.task_switcher._cleanup()
                 print("[OK] 任务切换器已清理")
-            
+
             # 注销热键
             if self.hotkey_manager:
                 self.hotkey_manager.cleanup()
                 print("[OK] 热键已注销")
-            
+
             # 保存数据（最终保存，作为双重保险）
             if self.data_storage and self.task_manager:
                 print("[INFO] 执行退出时的最终保存（双重保险）...")
                 tasks = self.task_manager.get_all_tasks()
                 if self.data_storage.save_tasks(tasks):
-                    print("[OK] 数据已保存")
+                    print("[OK] 任务数据已保存")
                 else:
-                    print("[ERROR] 数据保存失败")
-            
+                    print("[ERROR] 任务数据保存失败")
+
+                # 保存时间追踪数据
+                if self.data_storage.save_time_tracking(time_tracker):
+                    print("[OK] 时间追踪数据已保存")
+                else:
+                    print("[ERROR] 时间追踪数据保存失败")
+
             print("[OK] 资源清理完成")
-            
+
         except Exception as e:
             print(f"清理资源时出错: {e}")
 

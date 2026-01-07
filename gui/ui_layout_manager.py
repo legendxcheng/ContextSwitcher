@@ -58,8 +58,8 @@ class UILayoutManager(ILayoutManager):
         self.layout_provider = layout_provider
         
         # 布局配置
-        self.table_headings = ["#", "任务", "窗口", "状态", "待机时间"]
-        self.table_col_widths = [2, 12, 3, 3, 6]  # [编号, 任务名, 窗口数, 状态, 待机时间]
+        self.table_headings = ["#", "P", "任务", "窗口", "状态", "今日"]
+        self.table_col_widths = [2, 2, 9, 2, 2, 4]  # [编号, 优先级, 任务名, 窗口数, 状态, 今日时间]
         self.table_rows = 5
         
         print("✓ UI布局管理器初始化完成")
@@ -68,45 +68,65 @@ class UILayoutManager(ILayoutManager):
         """创建现代化Widget布局"""
         colors = ModernUIConfig.COLORS
         fonts = ModernUIConfig.FONTS
-        
+
         # 状态行 - 保持全局拖拽功能
         status_row = self._create_status_row(colors, fonts)
-        
+
+        # 搜索行
+        search_row = self._create_search_row(colors, fonts)
+
         # 任务表格行
         table_row = self._create_table_row()
-        
+
         # 按钮行
         button_row = self._create_button_row()
-        
+
         # 底部状态行
         bottom_row = self._create_bottom_row(colors, fonts)
-        
+
         # 组装完整布局
         layout = [
             [sg.Column([
                 status_row,
+                search_row,
                 table_row,
                 button_row,
                 bottom_row
-            ], element_justification='left', 
+            ], element_justification='left',
                expand_x=False, expand_y=False,
                pad=(0, 0),  # 无额外padding
                background_color=colors['background'])]
         ]
-        
+
         return layout
     
     def _create_status_row(self, colors: Dict[str, str], fonts: Dict[str, tuple]) -> List[Any]:
         """创建状态行"""
         return [
-            sg.Text("", key="-STATUS-", font=fonts['body'], 
+            sg.Text("", key="-STATUS-", font=fonts['body'],
                    text_color=colors['text_secondary']),
             sg.Push(),
-            sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12), 
+            sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12),
                    text_color=colors['success'], tooltip="就绪"),
-            sg.Button("✕", key="-CLOSE-", size=(1, 1), 
+            sg.Button("✕", key="-CLOSE-", size=(1, 1),
                      button_color=(colors['text'], colors['error']),
                      font=("Segoe UI", 10), border_width=0, tooltip="关闭")
+        ]
+
+    def _create_search_row(self, colors: Dict[str, str], fonts: Dict[str, tuple]) -> List[Any]:
+        """创建搜索行"""
+        return [
+            sg.Text("🔍", font=fonts['small'], text_color=colors['text_secondary']),
+            sg.Input(key="-SEARCH-", size=(12, 1), font=fonts['small'],
+                    enable_events=True, border_width=1,
+                    background_color=colors['surface'],
+                    text_color=colors['text'],
+                    tooltip="搜索任务名称、描述或标签"),
+            sg.Combo(["全部", "进行中", "待办", "已完成", "已暂停"],
+                    default_value="全部", key="-FILTER_STATUS-",
+                    size=(6, 1), font=fonts['small'], enable_events=True,
+                    readonly=True, tooltip="按状态筛选"),
+            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "primary", (2, 1), "刷新任务列表")
         ]
     
     def _create_table_row(self) -> List[Any]:
@@ -131,21 +151,45 @@ class UILayoutManager(ILayoutManager):
     def _create_button_row(self) -> List[Any]:
         """创建按钮行"""
         return [
-            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (2, 1), "添加任务"),
-            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1), "编辑任务"),
-            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1), "删除任务"),
-            sg.Text("", size=(1, 1)),  # 小分隔符
-            ModernUIConfig.create_modern_button("↻", "-REFRESH-", "secondary", (2, 1), "刷新"),
-            ModernUIConfig.create_modern_button("⚙", "-SETTINGS-", "warning", (2, 1), "设置")
+            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (2, 1),
+                "添加新任务并绑定窗口"),
+            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1),
+                "编辑选中的任务（双击任务也可编辑）"),
+            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1),
+                "删除选中的任务"),
+            ModernUIConfig.create_modern_button("🍅", "-FOCUS-", "error", (2, 1),
+                "番茄钟专注模式 - 点击开始/停止"),
+            ModernUIConfig.create_modern_button("📊", "-STATS-", "primary", (2, 1),
+                "查看今日和本周的专注统计"),
+            ModernUIConfig.create_modern_button("⚙", "-SETTINGS-", "warning", (2, 1),
+                "打开设置 - 配置快捷键和提醒")
         ]
     
     def _create_bottom_row(self, colors: Dict[str, str], fonts: Dict[str, tuple]) -> List[Any]:
-        """创建底部状态行"""
+        """创建底部状态行 - 显示今日专注时间、目标进度和番茄钟"""
         return [
-            sg.Text("", key="-MAIN_STATUS-", font=fonts['small'], 
-                   text_color=colors['text_secondary'], size=(8, 1)),
-            sg.Text("C+A+空格", font=fonts['small'], 
-                   text_color=colors['text_disabled'], size=(8, 1))
+            sg.Text("今日:", font=fonts['small'],
+                   text_color=colors['text_secondary'], size=(3, 1)),
+            sg.Text("0m", key="-TODAY_TOTAL-", font=fonts['small'],
+                   text_color=colors['primary'], size=(4, 1)),
+            sg.Text("/", font=fonts['small'],
+                   text_color=colors['text_disabled'], size=(1, 1)),
+            sg.Text("2h", key="-DAILY_GOAL-", font=fonts['small'],
+                   text_color=colors['text_secondary'], size=(2, 1),
+                   tooltip="每日专注目标"),
+            sg.Text("🍅", key="-FOCUS_ICON-", font=fonts['small'],
+                   text_color=colors['text_disabled'], visible=False),
+            sg.Text("--:--", key="-FOCUS_TIMER-", font=fonts['small'],
+                   text_color=colors['error'], size=(5, 1), visible=False),
+            sg.Push(),
+            sg.Text("⌨", font=fonts['small'], text_color=colors['text_disabled']),
+            sg.Text("C+A+空格", key="-HOTKEY_HINT-", font=fonts['small'],
+                   text_color=colors['primary'], size=(8, 1),
+                   tooltip="按此快捷键快速切换任务"),
+            sg.Button("?", key="-HELP-", size=(2, 1),
+                     button_color=(colors['text_secondary'], colors['surface']),
+                     font=fonts['small'], border_width=0,
+                     tooltip="显示帮助信息")
         ]
     
     def create_window(self, layout: List[List[Any]]) -> sg.Window:

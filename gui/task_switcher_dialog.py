@@ -320,15 +320,20 @@ class TaskSwitcherDialog:
         # 分隔线
         layout.append([sg.HorizontalSeparator()])
         
-        # 底部操作说明
+        # 底部操作说明（带倒计时显示）
         instruction_row = [
-            sg.Text("↑↓ 选择 | 回车确认 | ESC取消 | 2秒后自动切换", 
-                   font=self.fonts['instruction'], 
+            sg.Text("↑↓ 选择 | 回车确认 | ESC取消",
+                   font=self.fonts['instruction'],
                    text_color=self.colors['text_secondary'],
-                   justification='center', expand_x=True, pad=(0, 5))  # 减小间距
+                   pad=(0, 5)),
+            sg.Push(),
+            sg.Text("⏱", font=self.fonts['status'], text_color=self.colors['warning']),
+            sg.Text("2.0", key="-COUNTDOWN-", font=self.fonts['status'],
+                   text_color=self.colors['warning'], size=(3, 1)),
+            sg.Text("秒", font=self.fonts['instruction'], text_color=self.colors['text_secondary'])
         ]
         layout.append(instruction_row)
-        
+
         return layout
     
     def _create_task_row(self, index: int, task: Task) -> List[Any]:
@@ -451,31 +456,58 @@ class TaskSwitcherDialog:
         """更新选中状态的显示（简化版，避免不支持的API）"""
         if not self.window:
             return
-        
+
         try:
             # 简化版本：只更新文字内容，避免颜色更新导致的API错误
             for i in range(min(9, len(self.tasks))):
                 task = self.tasks[i]
                 is_selected = (i == self.selected_task_index)
-                
+
                 # 更新任务名称显示
                 task_name_key = f"-TASK_NAME-{i}-"
-                
+
                 if task_name_key in self.window.AllKeysDict:
                     # 更新任务名称显示（只更新文字内容）
                     if is_selected:
                         display_name = f"▶ {task.name}"
                     else:
                         display_name = f"  {task.name}"
-                    
+
                     # 只更新文字内容，避免颜色更新
                     self.window[task_name_key].update(value=display_name)
-            
+
             # print(f"🎯 选中状态已更新: 第{self.selected_task_index + 1}个任务")  # 减少log输出
-            
+
         except Exception as e:
             print(f"更新选中状态显示失败: {e}")
             # 不打印完整traceback，避免日志过多
+
+    def _update_countdown_display(self, remaining_time: float):
+        """更新倒计时显示
+
+        Args:
+            remaining_time: 剩余时间（秒）
+        """
+        if not self.window:
+            return
+
+        try:
+            countdown_key = "-COUNTDOWN-"
+            if countdown_key in self.window.AllKeysDict:
+                # 格式化显示
+                display_text = f"{remaining_time:.1f}"
+
+                # 根据剩余时间改变颜色
+                if remaining_time <= 0.5:
+                    color = self.colors['error']  # 红色 - 即将切换
+                elif remaining_time <= 1.0:
+                    color = self.colors['warning']  # 橙色 - 警告
+                else:
+                    color = self.colors['primary']  # 蓝色 - 正常
+
+                self.window[countdown_key].update(display_text, text_color=color)
+        except:
+            pass  # 忽略更新失败
     
     def _start_auto_close_timer(self):
         """启动自动关闭定时器（只使用时间戳，完全避免线程定时器）"""
@@ -519,6 +551,8 @@ class TaskSwitcherDialog:
                     else:
                         # 计算剩余时间，优化timeout设置
                         remaining_time = self.auto_close_delay - elapsed
+                        # 更新倒计时显示
+                        self._update_countdown_display(remaining_time)
                 
                 # 动态调整超时时间：如果有倒计时，使用较短的timeout便于及时响应
                 timeout = min(100, int(remaining_time * 1000)) if remaining_time else 100

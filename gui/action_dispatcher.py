@@ -10,6 +10,7 @@ from typing import Optional
 from abc import ABC, abstractmethod
 
 from core.task_manager import Task
+from core.time_tracker import get_time_tracker
 
 
 class IActionDispatcher(ABC):
@@ -157,14 +158,78 @@ class ActionDispatcher(IActionDispatcher):
         task_manager = self.action_provider.get_task_manager()
         task_count = len(task_manager.get_all_tasks())
         current_task = task_manager.get_current_task()
-        
+        time_tracker = get_time_tracker()
+
         if current_task:
             status = f"当前: {current_task.name}"
         else:
             status = f"{task_count} 个任务"
-        
+
         window["-STATUS-"].update(status)
-        window["-MAIN_STATUS-"].update("就绪")
+
+        # 更新今日总专注时间和目标进度
+        today_total = time_tracker.get_today_display()
+        today_seconds = time_tracker.get_today_total()
+        try:
+            window["-TODAY_TOTAL-"].update(today_total)
+
+            # 获取每日目标配置
+            from utils.config import get_config
+            config = get_config()
+            productivity_config = config.get_productivity_config()
+            daily_goal_minutes = productivity_config.get("daily_goal_minutes", 120)
+            daily_goal_seconds = daily_goal_minutes * 60
+
+            # 更新目标显示
+            goal_hours = daily_goal_minutes // 60
+            goal_mins = daily_goal_minutes % 60
+            goal_display = f"{goal_hours}h" if goal_mins == 0 else f"{goal_hours}h{goal_mins}m"
+            window["-DAILY_GOAL-"].update(goal_display)
+
+            # 根据完成比例更新颜色
+            progress = today_seconds / daily_goal_seconds if daily_goal_seconds > 0 else 0
+            if progress >= 1.0:
+                # 目标达成 - 绿色
+                window["-TODAY_TOTAL-"].update(text_color="#00DD00")
+            elif progress >= 0.5:
+                # 过半 - 蓝色
+                window["-TODAY_TOTAL-"].update(text_color="#0078D4")
+            else:
+                # 未过半 - 保持默认
+                window["-TODAY_TOTAL-"].update(text_color="#0078D4")
+
+            # 更新快捷键提示
+            self._update_hotkey_hint(window, config)
+        except:
+            pass  # 忽略键不存在的错误（向后兼容）
+
+    def _update_hotkey_hint(self, window, config) -> None:
+        """更新快捷键提示显示"""
+        try:
+            hotkey_config = config.get_hotkeys_config()
+            modifiers = hotkey_config.get('switcher_modifiers', ['ctrl', 'alt'])
+            key = hotkey_config.get('switcher_key', 'space')
+
+            # 格式化快捷键显示（简短形式）
+            mod_abbrev = {
+                'ctrl': 'C',
+                'alt': 'A',
+                'shift': 'S',
+                'win': 'W'
+            }
+            key_abbrev = {
+                'space': '空格',
+                'tab': 'Tab',
+                'enter': '回车'
+            }
+
+            mod_display = '+'.join([mod_abbrev.get(m, m[0].upper()) for m in modifiers])
+            key_display = key_abbrev.get(key, key.title())
+            hotkey_display = f"{mod_display}+{key_display}"
+
+            window["-HOTKEY_HINT-"].update(hotkey_display)
+        except:
+            pass
     
     def set_status(self, message: str, duration_ms: int = 0) -> None:
         """设置状态消息
@@ -178,7 +243,7 @@ class ActionDispatcher(IActionDispatcher):
             return
         
         try:
-            window["-MAIN_STATUS-"].update(message)
+            window["-STATUS-"].update(message)
             
             if duration_ms > 0:
                 # 记录状态清除时间，让主事件循环处理
@@ -212,7 +277,7 @@ class ActionDispatcher(IActionDispatcher):
             try:
                 window = self.action_provider.get_window()
                 if window:
-                    window["-MAIN_STATUS-"].update("就绪")
+                    window["-STATUS-"].update("就绪")
                     self.status_clear_time = 0  # 重置清除时间
             except Exception as e:
                 print(f"清除状态失败: {e}")

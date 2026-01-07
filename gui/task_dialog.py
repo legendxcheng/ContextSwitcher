@@ -53,6 +53,9 @@ class TaskDialog:
         self.task_name = ""
         self.task_description = ""
         self.task_status = TaskStatus.TODO
+        self.task_priority = 0  # 优先级: 0=普通, 1=低, 2=中, 3=高
+        self.task_notes = ""    # 快速笔记
+        self.task_tags: List[str] = []  # 标签列表
         self.selected_windows: List[WindowInfo] = []
         
         # 搜索和过滤相关
@@ -97,6 +100,9 @@ class TaskDialog:
         self.task_name = ""
         self.task_description = ""
         self.task_status = TaskStatus.TODO
+        self.task_priority = 0
+        self.task_notes = ""
+        self.task_tags = []
         self.selected_windows = []
         
         # 重置搜索状态
@@ -150,12 +156,18 @@ class TaskDialog:
                 description=self.task_description,
                 window_hwnds=window_hwnds
             )
-            
+
             if task:
-                # 设置状态
-                self.task_manager.edit_task(task.id, status=self.task_status)
+                # 设置状态、优先级、笔记和标签
+                self.task_manager.edit_task(
+                    task.id,
+                    status=self.task_status,
+                    priority=self.task_priority,
+                    notes=self.task_notes,
+                    tags=self.task_tags
+                )
                 return True
-        
+
         return False
     
     def show_edit_dialog(self, task: Task) -> bool:
@@ -174,6 +186,9 @@ class TaskDialog:
         self.task_name = task.name
         self.task_description = task.description
         self.task_status = task.status
+        self.task_priority = getattr(task, 'priority', 0)
+        self.task_notes = getattr(task, 'notes', "")
+        self.task_tags = getattr(task, 'tags', []) or []
         
         # 加载绑定的窗口
         self.selected_windows = []
@@ -227,17 +242,20 @@ class TaskDialog:
         result = self._run_dialog()
         
         if result:
-            # 更新任务
+            # 更新任务（包括优先级、笔记和标签）
             window_hwnds = [w.hwnd for w in self.selected_windows]
             success = self.task_manager.edit_task(
                 task.id,
                 name=self.task_name,
                 description=self.task_description,
                 status=self.task_status,
-                window_hwnds=window_hwnds
+                window_hwnds=window_hwnds,
+                priority=self.task_priority,
+                notes=self.task_notes,
+                tags=self.task_tags
             )
             return success
-        
+
         return False
     
     def _create_add_layout(self) -> List[List[Any]]:
@@ -250,17 +268,35 @@ class TaskDialog:
     
     def _create_base_layout(self, title: str) -> List[List[Any]]:
         """创建基础布局"""
+        # 优先级选项
+        priority_options = ["普通", "低", "中", "高"]
+        priority_default = priority_options[self.task_priority] if 0 <= self.task_priority < len(priority_options) else "普通"
+
+        # 标签显示文本（用逗号分隔）
+        tags_display = ", ".join(self.task_tags) if self.task_tags else ""
+
         # 任务信息区域
         info_frame = [
-            [sg.Text("任务名称:", size=(10, 1)), 
+            [sg.Text("任务名称:", size=(10, 1)),
              sg.Input(self.task_name, key="-TASK_NAME-", size=(40, 1))],
-            [sg.Text("任务描述:", size=(10, 1)), 
-             sg.Multiline(self.task_description, key="-TASK_DESC-", 
-                         size=(40, 3), enable_events=True)],
+            [sg.Text("任务描述:", size=(10, 1)),
+             sg.Multiline(self.task_description, key="-TASK_DESC-",
+                         size=(40, 2), enable_events=True)],
             [sg.Text("任务状态:", size=(10, 1)),
-             sg.Combo(["待办", "进行中", "已阻塞", "待审查", "已完成", "已暂停"], 
+             sg.Combo(["待办", "进行中", "已阻塞", "待审查", "已完成", "已暂停"],
                      default_value=self._status_to_text(self.task_status),
-                     key="-TASK_STATUS-", readonly=True, size=(15, 1))]
+                     key="-TASK_STATUS-", readonly=True, size=(12, 1)),
+             sg.Text("优先级:", size=(6, 1)),
+             sg.Combo(priority_options,
+                     default_value=priority_default,
+                     key="-TASK_PRIORITY-", readonly=True, size=(8, 1))],
+            [sg.Text("标签:", size=(10, 1)),
+             sg.Input(tags_display, key="-TASK_TAGS-", size=(40, 1),
+                     tooltip="用逗号分隔多个标签，例如: 前端, bug修复, 紧急")],
+            [sg.Text("快速笔记:", size=(10, 1)),
+             sg.Multiline(self.task_notes, key="-TASK_NOTES-",
+                         size=(40, 2), enable_events=True,
+                         tooltip="记录任务相关的快速笔记、链接或要点")]
         ]
         
         # 窗口选择区域
@@ -448,10 +484,23 @@ class TaskDialog:
         """保存表单数据"""
         self.task_name = values["-TASK_NAME-"].strip()
         self.task_description = values["-TASK_DESC-"].strip()
-        
+        self.task_notes = values.get("-TASK_NOTES-", "").strip()
+
         # 转换状态
         status_text = values["-TASK_STATUS-"]
         self.task_status = self._text_to_status(status_text)
+
+        # 转换优先级
+        priority_text = values.get("-TASK_PRIORITY-", "普通")
+        priority_map = {"普通": 0, "低": 1, "中": 2, "高": 3}
+        self.task_priority = priority_map.get(priority_text, 0)
+
+        # 解析标签（逗号分隔）
+        tags_text = values.get("-TASK_TAGS-", "").strip()
+        if tags_text:
+            self.task_tags = [tag.strip() for tag in tags_text.split(",") if tag.strip()]
+        else:
+            self.task_tags = []
     
     def _refresh_window_list(self):
         """刷新窗口列表（增强版，支持搜索和优先级）"""

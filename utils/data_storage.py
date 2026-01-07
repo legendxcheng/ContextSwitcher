@@ -20,18 +20,19 @@ from utils.config import get_config
 
 class DataStorage:
     """数据存储管理器"""
-    
+
     def __init__(self):
         """初始化数据存储"""
         self.config = get_config()
         self.data_dir = self.config.get_data_dir()
         self.tasks_file = self.data_dir / "tasks.json"
+        self.time_tracking_file = self.data_dir / "time_tracking.json"  # 时间追踪数据文件
         self.backup_dir = self.data_dir / "backups"
-        
+
         # 确保目录存在
         self.data_dir.mkdir(parents=True, exist_ok=True)
         self.backup_dir.mkdir(parents=True, exist_ok=True)
-        
+
         # 备份设置
         self.max_backups = self.config.get('data.backup_count', 3)
         self.auto_backup = self.config.get('data.auto_save', True)
@@ -57,7 +58,7 @@ class DataStorage:
             
             # 创建完整的数据结构
             data = {
-                "version": "1.1.0",  # 更新版本号以支持Explorer路径信息
+                "version": "1.2.0",  # v1.2.0: 支持智能窗口恢复 (app_type, working_directory, terminal_profile)
                 "saved_at": datetime.now().isoformat(),
                 "task_count": len(tasks_data),
                 "tasks": tasks_data
@@ -371,14 +372,82 @@ class DataStorage:
             # 先创建最后一次备份
             if self.tasks_file.exists():
                 self._create_backup()
-            
+
             # 删除任务文件
             if self.tasks_file.exists():
                 self.tasks_file.unlink()
                 print("[OK] 已删除任务文件")
-            
+
             return True
-            
+
         except Exception as e:
             print(f"清除数据失败: {e}")
+            return False
+
+    def save_time_tracking(self, time_tracker) -> bool:
+        """保存时间追踪数据
+
+        Args:
+            time_tracker: TimeTracker 实例
+
+        Returns:
+            是否成功保存
+        """
+        try:
+            data = {
+                "version": "1.0.0",
+                "saved_at": datetime.now().isoformat(),
+                "data": time_tracker.to_dict()
+            }
+
+            # 保存到临时文件，然后重命名（原子操作）
+            temp_file = self.time_tracking_file.with_suffix('.tmp')
+            with open(temp_file, 'w', encoding='utf-8') as f:
+                json.dump(data, f, indent=2, ensure_ascii=False)
+
+            # 原子替换
+            shutil.move(str(temp_file), str(self.time_tracking_file))
+
+            print(f"[OK] 已保存时间追踪数据到 {self.time_tracking_file}")
+            return True
+
+        except Exception as e:
+            print(f"保存时间追踪数据失败: {e}")
+            # 清理临时文件
+            temp_file = self.time_tracking_file.with_suffix('.tmp')
+            if temp_file.exists():
+                try:
+                    temp_file.unlink()
+                except:
+                    pass
+            return False
+
+    def load_time_tracking(self, time_tracker) -> bool:
+        """加载时间追踪数据
+
+        Args:
+            time_tracker: TimeTracker 实例
+
+        Returns:
+            是否成功加载
+        """
+        try:
+            if not self.time_tracking_file.exists():
+                print("时间追踪文件不存在，使用空数据")
+                return True
+
+            with open(self.time_tracking_file, 'r', encoding='utf-8') as f:
+                data = json.load(f)
+
+            if "data" in data:
+                time_tracker.from_dict(data["data"])
+                session_count = len(time_tracker.sessions)
+                print(f"[OK] 已加载 {session_count} 条时间追踪记录")
+                return True
+            else:
+                print("时间追踪数据格式错误")
+                return False
+
+        except Exception as e:
+            print(f"加载时间追踪数据失败: {e}")
             return False

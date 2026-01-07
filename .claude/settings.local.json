@@ -1,7 +1,11 @@
 {
   "permissions": {
     "allow": [
-      "Bash(sed:*)"
+      "Bash(sed:*)",
+      "Bash(python:*)",
+      "Bash(timeout 5 python:*)",
+      "Bash(python -m py_compile:*)",
+      "WebSearch"
     ],
     "deny": [],
     "ask": []

@@ -4,12 +4,12 @@
 提供窗口搜索相关的工具函数：
 - 多关键词搜索匹配
 - 搜索结果高亮显示
-- 模糊匹配算法
+- 模糊匹配算法（首字母缩写、连续子序列、编辑距离）
 - 搜索结果评分
 """
 
 import re
-from typing import List, Tuple, Dict, Any
+from typing import List, Tuple, Dict, Any, Optional
 from dataclasses import dataclass
 
 
@@ -82,45 +82,193 @@ class SearchHelper:
     @staticmethod
     def calculate_match_score(text: str, keywords: List[str]) -> Tuple[int, List[str]]:
         """计算文本与关键词的匹配分数
-        
+
+        支持多种匹配模式：
+        - 精确包含匹配（最高优先级）
+        - 首字母缩写匹配（如 "vsc" 匹配 "Visual Studio Code"）
+        - 连续子序列匹配（如 "vscode" 匹配 "Visual Studio Code"）
+        - 模糊匹配（允许少量编辑距离）
+
         Args:
             text: 要匹配的文本
             keywords: 关键词列表
-            
+
         Returns:
             元组 (匹配分数, 匹配的关键词列表)
         """
         if not text or not keywords:
             return 0, []
-        
+
         text_lower = text.lower()
         matched_keywords = []
         score = 0
-        
+
         for keyword in keywords:
             keyword_lower = keyword.lower()
-            
+            keyword_score = 0
+
+            # 1. 精确包含匹配（最高分）
             if keyword_lower in text_lower:
-                matched_keywords.append(keyword)
-                
-                # 计算匹配分数
                 if text_lower == keyword_lower:
-                    # 完全匹配：最高分
-                    score += 100
+                    keyword_score = 100  # 完全匹配
                 elif text_lower.startswith(keyword_lower):
-                    # 前缀匹配：高分
-                    score += 80
+                    keyword_score = 80   # 前缀匹配
                 elif text_lower.endswith(keyword_lower):
-                    # 后缀匹配：中高分
-                    score += 60
+                    keyword_score = 60   # 后缀匹配
                 else:
-                    # 包含匹配：基础分
-                    score += 40
-                
-                # 根据关键词长度给额外分数
-                score += len(keyword)
-        
+                    keyword_score = 40   # 包含匹配
+
+                keyword_score += len(keyword)
+                matched_keywords.append(keyword)
+
+            # 2. 首字母缩写匹配（如 "vsc" -> "Visual Studio Code"）
+            elif SearchHelper._match_initials(text, keyword_lower):
+                keyword_score = 35 + len(keyword)
+                matched_keywords.append(keyword)
+
+            # 3. 连续子序列匹配（如 "vscode" -> "Visual Studio Code"）
+            elif SearchHelper._match_subsequence(text_lower, keyword_lower):
+                keyword_score = 25 + len(keyword)
+                matched_keywords.append(keyword)
+
+            # 4. 模糊匹配（编辑距离，允许少量错误）
+            elif len(keyword) >= 3:  # 只对较长的关键词进行模糊匹配
+                fuzzy_score = SearchHelper._fuzzy_match_score(text_lower, keyword_lower)
+                if fuzzy_score > 0:
+                    keyword_score = fuzzy_score
+                    matched_keywords.append(keyword)
+
+            score += keyword_score
+
         return score, matched_keywords
+
+    @staticmethod
+    def _match_initials(text: str, keyword: str) -> bool:
+        """匹配首字母缩写
+
+        例如：
+        - "vsc" 匹配 "Visual Studio Code"
+        - "np" 匹配 "Notepad++"
+
+        Args:
+            text: 原文本
+            keyword: 搜索关键词（小写）
+
+        Returns:
+            是否匹配
+        """
+        if not keyword or not text:
+            return False
+
+        # 提取文本中单词的首字母
+        words = re.split(r'[\s\-_\.]+', text)
+        initials = ''.join(word[0].lower() for word in words if word)
+
+        # 检查关键词是否是首字母的子串
+        return keyword in initials
+
+    @staticmethod
+    def _match_subsequence(text: str, keyword: str) -> bool:
+        """匹配连续子序列
+
+        检查关键词的字符是否按顺序出现在文本中
+
+        例如：
+        - "vscode" 匹配 "visual studio code"
+        - "notep" 匹配 "notepad++"
+
+        Args:
+            text: 原文本（小写）
+            keyword: 搜索关键词（小写）
+
+        Returns:
+            是否匹配
+        """
+        if not keyword or not text:
+            return False
+
+        # 移除空格进行比较
+        text_no_space = text.replace(' ', '').replace('-', '').replace('_', '').replace('.', '')
+
+        # 检查关键词是否是无空格文本的子串
+        if keyword in text_no_space:
+            return True
+
+        # 检查字符是否按顺序出现
+        keyword_idx = 0
+        for char in text_no_space:
+            if keyword_idx < len(keyword) and char == keyword[keyword_idx]:
+                keyword_idx += 1
+
+        # 需要匹配至少60%的字符才算成功
+        return keyword_idx >= len(keyword) * 0.6
+
+    @staticmethod
+    def _fuzzy_match_score(text: str, keyword: str, max_distance: int = 2) -> int:
+        """计算模糊匹配分数（基于编辑距离）
+
+        Args:
+            text: 原文本（小写）
+            keyword: 搜索关键词（小写）
+            max_distance: 允许的最大编辑距离
+
+        Returns:
+            匹配分数（0表示不匹配）
+        """
+        if not keyword or not text:
+            return 0
+
+        # 对文本中的每个单词进行模糊匹配
+        words = re.split(r'[\s\-_\.]+', text)
+
+        best_score = 0
+        for word in words:
+            if not word:
+                continue
+            word_lower = word.lower()
+
+            # 计算编辑距离
+            distance = SearchHelper._levenshtein_distance(word_lower, keyword)
+
+            # 允许的编辑距离与关键词长度成正比
+            allowed_distance = min(max_distance, len(keyword) // 3)
+
+            if distance <= allowed_distance:
+                # 编辑距离越小，分数越高
+                word_score = 20 - (distance * 5)
+                best_score = max(best_score, word_score)
+
+        return best_score
+
+    @staticmethod
+    def _levenshtein_distance(s1: str, s2: str) -> int:
+        """计算两个字符串的编辑距离（Levenshtein距离）
+
+        Args:
+            s1: 字符串1
+            s2: 字符串2
+
+        Returns:
+            编辑距离
+        """
+        if len(s1) < len(s2):
+            s1, s2 = s2, s1
+
+        if len(s2) == 0:
+            return len(s1)
+
+        previous_row = range(len(s2) + 1)
+
+        for i, c1 in enumerate(s1):
+            current_row = [i + 1]
+            for j, c2 in enumerate(s2):
+                insertions = previous_row[j + 1] + 1
+                deletions = current_row[j] + 1
+                substitutions = previous_row[j] + (c1 != c2)
+                current_row.append(min(insertions, deletions, substitutions))
+            previous_row = current_row
+
+        return previous_row[-1]
     
     @staticmethod
     def search_windows(windows: List[Any], query: str) -> List[SearchResult]:
@@ -243,30 +391,48 @@ class SearchHelper:
 def test_search_functionality():
     """测试搜索功能"""
     print("🧪 测试搜索功能...")
-    
+
     # 模拟窗口数据
     class MockWindow:
         def __init__(self, title, process_name):
             self.title = title
             self.process_name = process_name
-    
+
     windows = [
         MockWindow("Google Chrome", "chrome.exe"),
         MockWindow("Visual Studio Code", "Code.exe"),
         MockWindow("微信", "WeChat.exe"),
         MockWindow("Notepad++", "notepad++.exe"),
         MockWindow("Windows Terminal", "WindowsTerminal.exe"),
+        MockWindow("Microsoft Word", "WINWORD.EXE"),
+        MockWindow("File Explorer", "explorer.exe"),
     ]
-    
-    # 测试搜索
-    test_queries = ["chrome", "code", "微信", "note", "chrome code"]
-    
-    for query in test_queries:
-        print(f"\n搜索: '{query}'")
+
+    # 测试搜索 - 包含模糊匹配测试
+    test_queries = [
+        ("chrome", "精确匹配"),
+        ("code", "精确匹配"),
+        ("微信", "中文匹配"),
+        ("note", "前缀匹配"),
+        ("chrome code", "多关键词"),
+        ("vsc", "首字母缩写 - Visual Studio Code"),
+        ("np", "首字母缩写 - Notepad++"),
+        ("wt", "首字母缩写 - Windows Terminal"),
+        ("vscode", "连续子序列"),
+        ("msword", "连续子序列"),
+        ("chrom", "模糊匹配 - 少一个字母"),
+        ("notepadd", "模糊匹配 - 多一个字母"),
+    ]
+
+    for query, description in test_queries:
+        print(f"\n搜索: '{query}' ({description})")
         results = SearchHelper.search_windows(windows, query)
-        
-        for i, result in enumerate(results[:3]):  # 只显示前3个结果
-            print(f"  {i+1}. {result.highlighted_title} ({result.highlighted_process}) - 分数: {result.score}")
+
+        if results:
+            for i, result in enumerate(results[:3]):  # 只显示前3个结果
+                print(f"  {i+1}. {result.item.title} ({result.item.process_name}) - 分数: {result.score}")
+        else:
+            print("  无匹配结果")
 
 
 if __name__ == "__main__":

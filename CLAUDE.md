@@ -29,6 +29,11 @@ ContextSwitcher is a Windows desktop application designed for developers to mana
 - **SmartRebindManager** (`smart_rebind_manager.py`): 智能重新绑定，处理窗口失效后的重新绑定
 - **TaskStatusManager** (`task_status_manager.py`): 任务状态管理 (TODO, IN_PROGRESS, BLOCKED, REVIEW, COMPLETED, PAUSED)
 - **ExplorerHelper** (`explorer_helper.py`): Explorer窗口的特殊处理，支持路径获取和恢复
+- **AppHelpers** (`app_helpers/`): v1.2.0 新增，智能窗口恢复辅助模块
+  - `base_app_helper.py`: 抽象基类
+  - `terminal_helper.py`: Windows Terminal/PowerShell/CMD 支持
+  - `vscode_helper.py`: VS Code 支持
+  - `app_helper_registry.py`: 辅助类注册表
 
 ### GUI Components (gui/)
 - **MainWindow** (`main_window.py`): 主窗口界面，实现多个接口的架构设计

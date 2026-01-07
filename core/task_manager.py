@@ -18,6 +18,8 @@ from enum import Enum
 
 from core.window_manager import WindowManager, WindowInfo
 from core.explorer_helper import ExplorerHelper
+from core.time_tracker import get_time_tracker, TimeTracker
+from core.app_helpers import get_app_helper_registry, AppHelperRegistry
 
 
 class TaskStatus(Enum):
@@ -41,8 +43,23 @@ class BoundWindow:
     folder_path: Optional[str] = None  # Explorer窗口的文件夹路径
     window_rect: Optional[Tuple[int, int, int, int]] = None  # 窗口位置和大小 (left, top, right, bottom)
 
+    # v1.2.0 新增字段：智能窗口恢复支持
+    app_type: Optional[str] = None           # 应用类型: 'explorer', 'terminal', 'vscode', 'generic'
+    working_directory: Optional[str] = None  # 工作目录 (Terminal/VS Code)
+    terminal_profile: Optional[str] = None   # Terminal配置文件名 (PowerShell, cmd, bash等)
 
-@dataclass 
+    def get_restore_context(self) -> Dict[str, Any]:
+        """获取窗口恢复所需的上下文信息"""
+        return {
+            'app_type': self.app_type,
+            'folder_path': self.folder_path,
+            'working_directory': self.working_directory,
+            'terminal_profile': self.terminal_profile,
+            'window_rect': self.window_rect,
+        }
+
+
+@dataclass
 class Task:
     """任务数据类"""
     id: str                           # 任务唯一ID
@@ -54,6 +71,9 @@ class Task:
     last_accessed: str = ""           # 最后访问时间
     access_count: int = 0             # 访问次数
     tags: List[str] = field(default_factory=list)  # 标签
+    priority: int = 0                 # 优先级 (0=普通, 1=低, 2=中, 3=高)
+    notes: str = ""                   # 快速笔记
+    total_time_seconds: int = 0       # 总专注时间(秒)
     
     def __post_init__(self):
         """初始化后处理"""
@@ -82,10 +102,27 @@ class Task:
             for window_data in data['bound_windows']:
                 if isinstance(window_data, dict):
                     # 确保新字段有默认值（向后兼容性）
+                    # v1.1.0 字段
                     if 'folder_path' not in window_data:
                         window_data['folder_path'] = None
                     if 'window_rect' not in window_data:
                         window_data['window_rect'] = None
+                    # v1.2.0 新增字段
+                    if 'app_type' not in window_data:
+                        # 从进程名自动推断 app_type
+                        process_name = window_data.get('process_name', '').lower()
+                        if process_name == 'explorer.exe':
+                            window_data['app_type'] = 'explorer'
+                        elif process_name in ('windowsterminal.exe', 'powershell.exe', 'pwsh.exe', 'cmd.exe'):
+                            window_data['app_type'] = 'terminal'
+                        elif process_name == 'code.exe':
+                            window_data['app_type'] = 'vscode'
+                        else:
+                            window_data['app_type'] = 'generic'
+                    if 'working_directory' not in window_data:
+                        window_data['working_directory'] = None
+                    if 'terminal_profile' not in window_data:
+                        window_data['terminal_profile'] = None
                     windows.append(BoundWindow(**window_data))
                 else:
                     windows.append(window_data)
@@ -96,19 +133,23 @@ class Task:
 
 class TaskManager:
     """任务管理器"""
-    
+
     def __init__(self, window_manager: Optional[WindowManager] = None):
         """初始化任务管理器
-        
+
         Args:
             window_manager: 窗口管理器实例
         """
         self.window_manager = window_manager or WindowManager()
         self.explorer_helper = ExplorerHelper()
+        self.app_helper_registry = get_app_helper_registry()  # 智能窗口恢复辅助类注册表
         self.tasks: List[Task] = []
         self.current_task_index: int = -1
         self.max_tasks = 9  # 最多支持9个任务（对应数字键1-9）
-        
+
+        # 时间追踪器
+        self.time_tracker: TimeTracker = get_time_tracker()
+
         # 事件回调
         self.on_task_added = None
         self.on_task_removed = None
@@ -198,16 +239,21 @@ class TaskManager:
         return True
     
     def edit_task(self, task_id: str, name: str = None, description: str = None,
-                  status: TaskStatus = None, window_hwnds: List[int] = None) -> bool:
+                  status: TaskStatus = None, window_hwnds: List[int] = None,
+                  priority: int = None, notes: str = None,
+                  tags: List[str] = None) -> bool:
         """编辑任务
-        
+
         Args:
             task_id: 任务ID
             name: 新的任务名称
             description: 新的任务描述
             status: 新的任务状态
             window_hwnds: 新的窗口绑定列表
-            
+            priority: 新的优先级 (0=普通, 1=低, 2=中, 3=高)
+            notes: 新的快速笔记
+            tags: 新的标签列表
+
         Returns:
             是否成功编辑
         """
@@ -215,9 +261,9 @@ class TaskManager:
         if not task:
             print(f"任务不存在: {task_id}")
             return False
-        
+
         changed = False
-        
+
         # 更新名称
         if name is not None and name.strip() != task.name:
             # 检查新名称是否重复
@@ -226,80 +272,107 @@ class TaskManager:
                 return False
             task.name = name.strip()
             changed = True
-        
+
         # 更新描述
         if description is not None and description.strip() != task.description:
             task.description = description.strip()
             changed = True
-        
+
         # 更新状态
         if status is not None and status != task.status:
             task.status = status
             changed = True
-        
+
+        # 更新优先级
+        if priority is not None and priority != task.priority:
+            task.priority = priority
+            changed = True
+
+        # 更新笔记
+        if notes is not None and notes != task.notes:
+            task.notes = notes
+            changed = True
+
+        # 更新标签
+        if tags is not None and tags != task.tags:
+            task.tags = tags
+            changed = True
+
         # 更新窗口绑定
         if window_hwnds is not None:
             task.bound_windows.clear()
             self._bind_windows_to_task(task, window_hwnds)
             changed = True
-        
+
         if changed:
             # 触发事件回调
             if self.on_task_updated:
                 self.on_task_updated(task)
-            
+
             print(f"✓ 已更新任务: {task.name}")
-        
+
         return True
     
     def switch_to_task(self, index: int) -> bool:
-        """切换到指定任务（支持中止机制）
-        
+        """切换到指定任务（支持中止机制和时间追踪）
+
         Args:
             index: 任务索引 (0-8 对应热键 1-9)
-            
+
         Returns:
             是否成功切换
         """
         if not (0 <= index < len(self.tasks)):
             print(f"任务索引无效: {index} (总共 {len(self.tasks)} 个任务)")
             return False
-        
+
         task = self.tasks[index]
-        
+
         # 生成独特的切换ID
         switch_id = str(uuid.uuid4())[:8]
-        
+
         print(f"正在切换到任务: {task.name} (ID: {switch_id})")
-        
+
         # 中止当前正在进行的切换
         aborted_previous = self.window_manager.abort_current_switch(switch_id)
         if aborted_previous:
             print(f"⚠️ 已中止上一个切换操作")
-        
+
+        # 记录上一个任务的时间
+        if self.current_task_index >= 0 and self.current_task_index < len(self.tasks):
+            prev_task = self.tasks[self.current_task_index]
+            # 结束上一个任务的计时并更新累计时间
+            if self.time_tracker.current_session:
+                ended_session = self.time_tracker.end_session()
+                if ended_session:
+                    prev_task.total_time_seconds += ended_session.duration_seconds
+
         # 更新访问信息
         task.last_accessed = datetime.now().isoformat()
         task.access_count += 1
         self.current_task_index = index
-        
+
+        # 开始新任务的计时
+        self.time_tracker.start_session(task.id, task.name)
+
         # 验证绑定的窗口
         valid_windows = self._validate_bound_windows(task)
-        
+
         if not valid_windows:
             print(f"警告: 任务 '{task.name}' 没有有效的绑定窗口")
             return False
-        
+
         # 激活所有有效窗口（带上切换ID）
         hwnds = [w.hwnd for w in valid_windows]
         results = self.window_manager.activate_multiple_windows(hwnds, switch_id=switch_id)
-        
+
         success_count = sum(1 for success in results.values() if success)
         print(f"任务切换完成: {success_count}/{len(hwnds)} 个窗口成功激活 (ID: {switch_id})")
-        
+
         # 触发事件回调
         if self.on_task_switched:
             self.on_task_switched(task, index)
-        
+
         # 如果有任何窗口激活成功，就认为切换成功
         return success_count > 0
     
@@ -420,20 +493,41 @@ class TaskManager:
         return -1
     
     def _bind_windows_to_task(self, task: Task, window_hwnds: List[int]):
-        """为任务绑定窗口"""
+        """为任务绑定窗口（支持智能上下文提取）"""
         for hwnd in window_hwnds:
             window_info = self.window_manager.get_window_info(hwnd)
             if window_info:
                 # 获取窗口位置信息
                 window_rect = self.explorer_helper.get_window_rect(hwnd)
-                
-                # 如果是Explorer窗口，获取文件夹路径
+
+                # 检测应用类型并提取上下文
+                app_type = self.app_helper_registry.detect_app_type(window_info.process_name)
+
+                # 初始化上下文字段
                 folder_path = None
-                if self.explorer_helper.is_explorer_window(hwnd):
-                    folder_path = self.explorer_helper.get_explorer_folder_path(hwnd)
-                    if folder_path:
-                        print(f"  ✓ 检测到Explorer路径: {folder_path}")
-                
+                working_directory = None
+                terminal_profile = None
+
+                if app_type == 'explorer':
+                    # Explorer窗口：使用专门的ExplorerHelper
+                    if self.explorer_helper.is_explorer_window(hwnd):
+                        folder_path = self.explorer_helper.get_explorer_folder_path(hwnd)
+                        if folder_path:
+                            print(f"  ✓ 检测到Explorer路径: {folder_path}")
+
+                elif app_type in ('terminal', 'vscode'):
+                    # Terminal/VS Code窗口：使用app_helper_registry提取上下文
+                    context = self.app_helper_registry.extract_context(
+                        hwnd, window_info.title, window_info.process_name
+                    )
+                    working_directory = context.get('working_directory')
+                    terminal_profile = context.get('terminal_profile')
+
+                    if working_directory:
+                        print(f"  ✓ 检测到{app_type}工作目录: {working_directory}")
+                    if terminal_profile:
+                        print(f"  ✓ 检测到Terminal配置: {terminal_profile}")
+
                 bound_window = BoundWindow(
                     hwnd=hwnd,
                     title=window_info.title,
@@ -441,17 +535,21 @@ class TaskManager:
                     binding_time=datetime.now().isoformat(),
                     is_valid=True,
                     folder_path=folder_path,
-                    window_rect=window_rect
+                    window_rect=window_rect,
+                    app_type=app_type,
+                    working_directory=working_directory,
+                    terminal_profile=terminal_profile,
                 )
                 task.bound_windows.append(bound_window)
-                print(f"  ✓ 已绑定窗口: {window_info.title}")
+                print(f"  ✓ 已绑定窗口: {window_info.title} (类型: {app_type})")
             else:
                 print(f"  ✗ 无效窗口句柄: {hwnd}")
     
     def _validate_bound_windows(self, task: Task) -> List[BoundWindow]:
-        """验证任务的绑定窗口，返回有效窗口列表（支持Explorer窗口恢复）"""
+        """验证任务的绑定窗口，返回有效窗口列表（支持智能窗口恢复和自动重绑定）"""
         valid_windows = []
-        
+        windows_updated = False  # 标记是否有窗口被更新
+
         for window in task.bound_windows:
             if self.window_manager.is_window_valid(window.hwnd):
                 window.is_valid = True
@@ -459,23 +557,89 @@ class TaskManager:
             else:
                 window.is_valid = False
                 print(f"  ✗ 窗口已失效: {window.title}")
-                
-                # 如果是Explorer窗口且有路径信息，尝试恢复
-                if (window.folder_path and 
-                    window.process_name and 
-                    window.process_name.lower() == 'explorer.exe'):
-                    
-                    print(f"  🔄 尝试恢复Explorer窗口: {window.folder_path}")
-                    
-                    if self.explorer_helper.restore_explorer_window(
-                        window.folder_path, window.window_rect):
-                        
-                        print(f"  ✓ Explorer窗口恢复成功，请手动重新绑定")
-                        # 注意：这里不更新window.hwnd，因为需要用户手动重新绑定新窗口
-                    else:
-                        print(f"  ✗ Explorer窗口恢复失败")
-        
+
+                # 尝试智能恢复窗口
+                new_hwnd = self._try_restore_window(window)
+
+                if new_hwnd:
+                    # 自动重绑定：更新窗口句柄和标题
+                    old_hwnd = window.hwnd
+                    window.hwnd = new_hwnd
+                    window.is_valid = True
+                    try:
+                        import win32gui
+                        window.title = win32gui.GetWindowText(new_hwnd)
+                    except Exception:
+                        pass
+                    window.binding_time = datetime.now().isoformat()
+                    valid_windows.append(window)
+                    windows_updated = True
+                    print(f"  ✓ 窗口已自动恢复并重绑定: {window.title}")
+
+        # 如果有窗口被更新，触发任务更新事件以保存数据
+        if windows_updated and self.on_task_updated:
+            self.on_task_updated(task)
+
         return valid_windows
+
+    def _try_restore_window(self, window: 'BoundWindow') -> Optional[int]:
+        """尝试恢复失效的窗口
+
+        根据窗口的 app_type 选择合适的恢复策略
+
+        Args:
+            window: 失效的绑定窗口
+
+        Returns:
+            新窗口句柄，失败返回 None
+        """
+        app_type = window.app_type or 'generic'
+        context = window.get_restore_context()
+
+        # Explorer 窗口：使用专门的 ExplorerHelper
+        if app_type == 'explorer' or (
+            window.folder_path and
+            window.process_name and
+            window.process_name.lower() == 'explorer.exe'
+        ):
+            print(f"  🔄 尝试恢复Explorer窗口: {window.folder_path}")
+
+            if self.explorer_helper.restore_explorer_window(
+                window.folder_path, window.window_rect
+            ):
+                # 查找新创建的Explorer窗口
+                new_hwnd = self.explorer_helper._find_latest_explorer_window(
+                    window.folder_path, timeout=2.0
+                )
+                if new_hwnd:
+                    return new_hwnd
+
+            print(f"  ✗ Explorer窗口恢复失败")
+            return None
+
+        # Terminal/VS Code 窗口：使用 app_helper_registry
+        if app_type in ('terminal', 'vscode'):
+            restore_path = context.get('working_directory') or context.get('folder_path')
+            print(f"  🔄 尝试恢复{app_type}窗口: {restore_path}")
+
+            # 检查是否可以恢复
+            if not self.app_helper_registry.can_restore(app_type, context):
+                print(f"  ✗ 无法恢复{app_type}窗口: 上下文信息不足")
+                return None
+
+            # 尝试恢复
+            new_hwnd = self.app_helper_registry.restore_window(
+                app_type, context, window.window_rect
+            )
+
+            if new_hwnd:
+                return new_hwnd
+
+            print(f"  ✗ {app_type}窗口恢复失败")
+            return None
+
+        # 其他类型窗口：暂不支持恢复
+        return None
     
     def replace_window(self, task_id: str, old_hwnd: int, new_bound_window: BoundWindow) -> bool:
         """替换任务中的窗口绑定

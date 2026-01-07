@@ -132,7 +132,10 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         
         # 初始化事件控制器
         self.event_controller = EventController(self.task_manager, self)
-        
+
+        # 连接数据提供器到事件控制器（用于搜索筛选）
+        self.event_controller.set_data_provider(self.data_provider)
+
         # 设置任务管理器回调（通过ActionDispatcher）
         self.action_dispatcher.setup_task_manager_callbacks()
         
@@ -246,11 +249,15 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
                 if current_time - self.last_refresh > self.refresh_interval:
                     self.action_dispatcher.update_display()
                     self.last_refresh = current_time
-                
+
+                # 更新番茄钟显示
+                if self.event_controller:
+                    self.event_controller.update_focus_timer_display()
+
                 # 定期监控待机时间
                 if self.notification_controller.should_check_idle_tasks(current_time):
                     self.notification_controller.check_idle_tasks()
-                
+
                 # 检查状态消息是否需要清除
                 self.action_dispatcher.check_status_clear(current_time)
                 

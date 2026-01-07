@@ -29,7 +29,8 @@ class Config:
             "app": {
                 "version": "1.0.0",
                 "theme": "DefaultNoMoreNagging",
-                "language": "zh_CN"
+                "language": "zh_CN",
+                "first_run": True  # 首次运行标记
             },
             "window": {
                 "width": 600,
@@ -67,6 +68,12 @@ class Config:
                 "auto_close_delay": 2.0,
                 "show_hotkey_hints": True,
                 "show_empty_slots": True
+            },
+            "productivity": {
+                "daily_goal_minutes": 120,  # 每日专注目标（分钟），默认2小时
+                "show_goal_progress": True,  # 显示目标进度
+                "goal_reminder_enabled": True,  # 启用目标达成提醒
+                "weekly_goal_hours": 20  # 每周专注目标（小时）
             }
         }
         
@@ -237,6 +244,10 @@ class Config:
         """获取监控配置"""
         return self.get('monitoring', {})
     
+    def get_productivity_config(self) -> Dict[str, Any]:
+        """获取生产力配置"""
+        return self.config.get("productivity", self.default_config["productivity"])
+
     def get_task_switcher_config(self) -> Dict[str, Any]:
         """获取任务切换器配置"""
         return self.get('task_switcher', {})
