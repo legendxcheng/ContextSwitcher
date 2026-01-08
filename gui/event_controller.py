@@ -87,18 +87,29 @@ class EventController(IEventHandler):
             "-ADD_TASK-": self._handle_add_task,
             "-EDIT_TASK-": self._handle_edit_task,
             "-DELETE_TASK-": self._handle_delete_task,
+            "-UNDO_DELETE-": self._handle_undo_delete,
             "-REFRESH-": self._handle_refresh,
             "-SETTINGS-": self._handle_settings,
             "-FOCUS-": self._handle_focus_timer,
             "-STATS-": self._handle_stats,
             "-SEARCH-": self._handle_search,
             "-FILTER_STATUS-": self._handle_filter_status,
+            "-SORT_BY-": self._handle_sort_by,
             "-TASK_TABLE-": self._handle_table_selection,
             "-TASK_TABLE- Double": self._handle_table_double_click,
             "-HOTKEY_TRIGGERED-": self._handle_hotkey_switcher_triggered,
             "-HOTKEY_ERROR-": self._handle_hotkey_error,
             "-HELP-": self._handle_help,
         }
+
+        # 删除撤销功能
+        self._deleted_task = None  # 临时保存被删除的任务
+        self._undo_expiry_time = 0  # 撤销操作过期时间
+        self._undo_timer_active = False
+
+        # 搜索历史功能
+        self._search_history = []  # 搜索历史列表
+        self._max_history = 10  # 最大历史记录数
     
     def handle_event(self, event: str, values: Dict[str, Any]) -> bool:
         """统一事件处理入口"""
@@ -107,7 +118,11 @@ class EventController(IEventHandler):
             if self._should_ignore_due_to_drag(event):
                 self.window_was_dragged = False  # 重置拖拽状态
                 return True
-            
+
+            # 处理数字键快捷键 (1-9) 快速切换任务
+            if self._handle_number_shortcut(event):
+                return True
+
             # 路由到具体的事件处理器
             handler = self.event_handlers.get(event)
             if handler:
@@ -144,6 +159,53 @@ class EventController(IEventHandler):
     def get_preserved_selection(self):
         """获取保存的选中状态"""
         return self.preserved_selection
+
+    def _handle_number_shortcut(self, event: str) -> bool:
+        """处理数字键快捷键 (1-9) 快速切换任务
+
+        Args:
+            event: 事件字符串
+
+        Returns:
+            是否成功处理了数字键事件
+        """
+        try:
+            # 检查是否是数字键事件 (格式: "1", "2", ..., "9" 或 "1:49", "2:50", ...)
+            number_key = None
+
+            # 直接数字键
+            if event in ["1", "2", "3", "4", "5", "6", "7", "8", "9"]:
+                number_key = int(event)
+            # 带键码的数字键
+            elif event and event[0] in "123456789" and ":" in event:
+                number_key = int(event[0])
+
+            if number_key is None:
+                return False
+
+            # 获取任务列表
+            tasks = self.task_manager.get_all_tasks()
+            task_index = number_key - 1  # 转换为0-based索引
+
+            if 0 <= task_index < len(tasks):
+                task = tasks[task_index]
+                print(f"⌨ 数字键 {number_key} 触发，切换到任务: {task.name}")
+                self.window_actions.set_status(f"正在切换到: {task.name}", 1000)
+
+                success = self.task_manager.switch_to_task(task_index)
+                if success:
+                    self.window_actions.set_status(f"已切换到: {task.name}", 3000)
+                else:
+                    self.window_actions.set_status(f"切换失败: {task.name}", 3000)
+                return True
+            else:
+                # 超出范围的数字键，播放提示音或显示提示
+                self.window_actions.set_status(f"没有第 {number_key} 个任务", 2000)
+                return True
+
+        except Exception as e:
+            print(f"处理数字键快捷键失败: {e}")
+            return False
 
     def set_data_provider(self, data_provider):
         """设置数据提供器引用"""
@@ -210,7 +272,7 @@ class EventController(IEventHandler):
             self.window_actions.set_status("编辑任务失败", 3000)
     
     def _handle_delete_task(self, values: Dict[str, Any]):
-        """处理删除任务"""
+        """处理删除任务 - 支持撤销"""
         try:
             selected_rows = values.get("-TASK_TABLE-", [])
             if not selected_rows:
@@ -234,20 +296,77 @@ class EventController(IEventHandler):
 
             # 确认删除
             result = self.popup_manager.show_question(
-                f"确定要删除任务 '{task.name}' 吗？\n\n此操作无法撤销。",
+                f"确定要删除任务 '{task.name}' 吗？\n\n删除后可在5秒内点击撤销按钮恢复。",
                 "确认删除"
             )
 
             if result:
+                # 保存任务副本用于撤销
+                import copy
+                self._deleted_task = copy.deepcopy(task)
+                import time
+                self._undo_expiry_time = time.time() + 5  # 5秒后过期
+
                 if self.task_manager.remove_task(task.id):
                     self.window_actions.update_display()
-                    self.window_actions.set_status("任务删除成功", 3000)
+                    self.window_actions.set_status("任务已删除 | 点击撤销按钮恢复", 5000)
+
+                    # 显示撤销按钮
+                    try:
+                        window = self.window_actions.get_window()
+                        window["-UNDO_DELETE-"].update(visible=True)
+                        self._undo_timer_active = True
+                    except:
+                        self._undo_timer_active = True
                 else:
-                    self.popup_manager.show_error("删除任务失败", "错误")
+                    self.popup_manager.show_error("删除任���失败", "错误")
+                    self._deleted_task = None
 
         except Exception as e:
             print(f"删除任务失败: {e}")
             self.window_actions.set_status("删除任务失败", 3000)
+
+    def _handle_undo_delete(self):
+        """处理撤销删除"""
+        try:
+            import time
+            if self._deleted_task is None:
+                self.window_actions.set_status("没有可撤销的删除操作", 2000)
+                return
+
+            if time.time() > self._undo_expiry_time:
+                self.window_actions.set_status("撤销时间已过期", 2000)
+                self._deleted_task = None
+                self._undo_timer_active = False
+                # 隐藏撤销按钮
+                try:
+                    window = self.window_actions.get_window()
+                    window["-UNDO_DELETE-"].update(visible=False)
+                except:
+                    pass
+                return
+
+            # 恢复任务
+            if self.task_manager.add_task(self._deleted_task):
+                self.window_actions.update_display()
+                self.window_actions.set_status(f"已恢复任务: {self._deleted_task.name}", 3000)
+                print(f"✓ 撤销删除成功: {self._deleted_task.name}")
+            else:
+                self.window_actions.set_status("撤销失败", 2000)
+
+            # 清除撤销状态并隐藏按钮
+            self._deleted_task = None
+            self._undo_timer_active = False
+            try:
+                window = self.window_actions.get_window()
+                window["-UNDO_DELETE-"].update(visible=False)
+            except:
+                pass
+
+        except Exception as e:
+            print(f"撤销删除失败: {e}")
+            self.window_actions.set_status("撤销失败", 2000)
+
     
     def _handle_refresh(self):
         """处理刷新"""
@@ -287,14 +406,39 @@ class EventController(IEventHandler):
             self.popup_manager.show_error(f"打开设置失败: {e}", "错误")
 
     def _handle_search(self, values: Dict[str, Any]):
-        """处理搜索输入"""
+        """处理搜索输入（支持历史记录）"""
         try:
             search_text = values.get("-SEARCH-", "")
             if self.data_provider:
                 self.data_provider.set_search_text(search_text)
+
+                # 更新搜索历史
+                if search_text and search_text not in self._search_history:
+                    self._search_history.insert(0, search_text)
+                    # 限制历史记录数量
+                    if len(self._search_history) > self._max_history:
+                        self._search_history = self._search_history[:self._max_history]
+
+                    # 更新搜索下拉框的选项
+                    try:
+                        window = self.window_actions.get_window()
+                        if window and "-SEARCH-" in window.AllKeysDict:
+                            window["-SEARCH-"].update(values=self._search_history + [search_text])
+                            window["-SEARCH-"].update(value=search_text)
+                    except:
+                        pass
+
                 self.window_actions.update_display()
         except Exception as e:
             print(f"搜索处理失败: {e}")
+
+    def get_search_history(self) -> list:
+        """获取搜索历史列表"""
+        return self._search_history.copy()
+
+    def clear_search_history(self):
+        """清除搜索历史"""
+        self._search_history = []
 
     def _handle_filter_status(self, values: Dict[str, Any]):
         """处理状态筛选"""
@@ -306,6 +450,17 @@ class EventController(IEventHandler):
                 self.window_actions.set_status(f"筛选: {status_filter}", 2000)
         except Exception as e:
             print(f"筛选处理失败: {e}")
+
+    def _handle_sort_by(self, values: Dict[str, Any]):
+        """处理排序方式变更"""
+        try:
+            sort_by = values.get("-SORT_BY-", "默认")
+            if self.data_provider:
+                self.data_provider.set_sort_by(sort_by)
+                self.window_actions.update_display()
+                self.window_actions.set_status(f"排序: {sort_by}", 2000)
+        except Exception as e:
+            print(f"排序处理失败: {e}")
 
     def _handle_stats(self):
         """处理统计按钮 - 显示生产力统计"""
@@ -563,27 +718,34 @@ class EventController(IEventHandler):
             key_display = key.title() if key else "Space"
             hotkey_display = f"{mod_display}+{key_display}"
 
-            help_text = f"""ContextSwitcher 快捷操作指南
+            help_text = f"""━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
+       ContextSwitcher 操作指南
+━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━
 
-━━━ 快捷键 ━━━
-{hotkey_display}  快速切换任务
+┌──────────────────────────────────────┐
+│ ⌨ 快捷键                              │
+├───────────��──────────────────────────┤
+│ {hotkey_display:<36} │ 快速切换任务
+└──────────────────────────────────────┘
 
-━━━ 鼠标操作 ━━━
-双击任务     切换到该任务的窗口
-单击任务     选中任务
+┌──────────────────────────────────────┐
+│ 🖱 鼠标操作                            │
+├──────────────────────────────────────┤
+│ 双击任务  → 切换到该任务的窗口          │
+│ 单击任���  → 选中任务                  │
+└──────────────────────────────────────┘
 
-━━━ 按钮说明 ━━━
-＋  添加新任务
-✎  编辑选中任务
-✕  删除选中任务
-🍅  番茄钟专注
-📊  查看统计
-⚙  打开设置
+┌──────────────────────────────────────┐
+│ 🎛 按钮说明                           │
+├──────────────────────────────────────┤
+│ ＋  添加新任务    ✎  编辑选中任务      │
+│ ✕  删除选中任务  🍅  番茄钟专注        │
+│ 📊  查看统计     ⚙  打开设置          │
+└──────────────────────────────────────┘
 
-━━━ 提示 ━━━
-• 可在设置中自定义快捷键
-• 支持一个任务绑定多个窗口
-• Explorer窗口会自动记住路径"""
+💡 提示: 可在设置中自定义快捷键和倒计时
+💡 支持: 一个任务绑定多个窗口
+💡 智能: Explorer窗口自动记住路径"""
 
             self.popup_manager.show_message(help_text, "帮助")
 

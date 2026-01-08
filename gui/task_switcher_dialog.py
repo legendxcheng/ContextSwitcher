@@ -88,34 +88,20 @@ class TaskSwitcherDialog:
     
     def _calculate_window_size(self, task_count: int) -> Tuple[int, int]:
         """根据任务数量计算窗口尺寸
-        
+
         Args:
             task_count: 任务数量
-            
+
         Returns:
             (width, height) 窗口尺寸
         """
-        # 基础尺寸
-        base_width = 400
-        base_height = 80   # 标题 + 分隔线 + 底部说明的基础高度
-        
-        # 每个任务行的高度（包括间距）
-        task_row_height = 25  # 进一步减小行高
-        
-        # 根据任务数量计算高度
-        tasks_height = task_count * task_row_height
-        
-        # 总高度 = 基础高度 + 任务行高度
-        total_height = base_height + tasks_height
-        
-        # 设置最小和最大尺寸
-        min_width, min_height = 350, 100
-        max_width, max_height = 600, 400
-        
-        width = max(min_width, min(max_width, base_width))
-        height = max(min_height, min(max_height, total_height))
-        
-        print(f"📏 窗口尺寸计算: {task_count}个任务 -> {width}x{height}")
+        width = 500
+        # 根据任务数量动态计算高度，每行约35像素
+        base_height = 100  # 标题、分隔线、底部说明
+        task_height = task_count * 35
+        height = min(500, max(200, base_height + task_height))
+
+        print(f"📏 窗口尺寸: {width}x{height}")
         return (width, height)
     
     def _show_no_tasks_message(self):
@@ -254,9 +240,13 @@ class TaskSwitcherDialog:
                 element_padding=(3, 3), # 减小元素间距
                 background_color=self.colors['background'],
                 return_keyboard_events=True,
-                use_default_focus=False,
-                grab_anywhere=True
+                use_default_focus=True,  # 改为True以获取焦点
+                grab_anywhere=False  # 改为False，避免拖拽干扰键盘操作
             )
+
+            # 确保窗口获得焦点
+            self.window.bring_to_front()
+            self.window.refresh()
             
             # 初始化选中状态为第一个任务
             self.selected_task_index = 0
@@ -300,20 +290,16 @@ class TaskSwitcherDialog:
             task = self.tasks[i]
             task_row = self._create_task_row(i, task)
             task_list_column.append(task_row)
-            
-            # 添加行间距（除了最后一行） - 缩小间距
-            if i < len(self.tasks) - 1:
-                task_list_column.append([sg.Text("", size=(1, 0))])
         
-        # 将任务列表放在紧凑的列中
+        # 将任务列表放在列中（无滚动条）
         layout.append([
             sg.Column(
                 task_list_column,
                 expand_x=True,
-                expand_y=False,  # 不强制垂直展开
+                expand_y=False,
                 scrollable=False,
                 background_color=self.colors['background'],
-                pad=(0, 5)  # 减小间距
+                pad=(0, 5)
             )
         ])
         
@@ -385,7 +371,7 @@ class TaskSwitcherDialog:
             key=f"-TASK_ROW-{index}-",
             expand_x=True,
             element_justification='left',
-            pad=(4, 1),  # 进一步减小垂直间距
+            pad=(4, 0),  # 减小垂直间距
             relief=sg.RELIEF_RAISED if is_selected else sg.RELIEF_FLAT
         )]
     

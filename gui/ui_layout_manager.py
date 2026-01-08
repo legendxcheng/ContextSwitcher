@@ -57,9 +57,9 @@ class UILayoutManager(ILayoutManager):
         """
         self.layout_provider = layout_provider
         
-        # 布局配置
+        # 布局配置 - 优化列宽以提升可读性
         self.table_headings = ["#", "P", "任务", "窗口", "状态", "今日"]
-        self.table_col_widths = [2, 2, 9, 2, 2, 4]  # [编号, 优先级, 任务名, 窗口数, 状态, 今日时间]
+        self.table_col_widths = [2, 2, 18, 3, 4, 5]  # [编号, 优先级, 任务名, 窗口数, 状态, 今日时间] - 任务名称列加宽
         self.table_rows = 5
         
         print("✓ UI布局管理器初始化完成")
@@ -114,18 +114,23 @@ class UILayoutManager(ILayoutManager):
         ]
 
     def _create_search_row(self, colors: Dict[str, str], fonts: Dict[str, tuple]) -> List[Any]:
-        """创建搜索行"""
+        """创建搜索行 - 支持搜索历史"""
         return [
             sg.Text("🔍", font=fonts['small'], text_color=colors['text_secondary']),
-            sg.Input(key="-SEARCH-", size=(12, 1), font=fonts['small'],
-                    enable_events=True, border_width=1,
+            sg.Combo([], key="-SEARCH-", size=(10, 1), font=fonts['small'],
+                    enable_events=True,
                     background_color=colors['surface'],
                     text_color=colors['text'],
-                    tooltip="搜索任务名称、描述或标签"),
+                    tooltip="搜索任务名称、描述或标签（支持历史记录）"),
             sg.Combo(["全部", "进行中", "待办", "已完成", "已暂停"],
                     default_value="全部", key="-FILTER_STATUS-",
                     size=(6, 1), font=fonts['small'], enable_events=True,
                     readonly=True, tooltip="按状态筛选"),
+            sg.Text("排序:", font=fonts['small'], text_color=colors['text_secondary']),
+            sg.Combo(["默认", "名称", "状态", "今日时间"],
+                    default_value="默认", key="-SORT_BY-",
+                    size=(5, 1), font=fonts['small'], enable_events=True,
+                    readonly=True, tooltip="排序方式"),
             ModernUIConfig.create_modern_button("↻", "-REFRESH-", "primary", (2, 1), "刷新任务列表")
         ]
     
@@ -149,19 +154,19 @@ class UILayoutManager(ILayoutManager):
         return [compact_table]
     
     def _create_button_row(self) -> List[Any]:
-        """创建按钮行"""
+        """创建按钮行 - 增大按钮尺寸提升可点击性"""
         return [
-            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (2, 1),
+            ModernUIConfig.create_modern_button("＋", "-ADD_TASK-", "success", (3, 1),
                 "添加新任务并绑定窗口"),
-            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (2, 1),
+            ModernUIConfig.create_modern_button("✎", "-EDIT_TASK-", "primary", (3, 1),
                 "编辑选中的任务（双击任务也可编辑）"),
-            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (2, 1),
+            ModernUIConfig.create_modern_button("✕", "-DELETE_TASK-", "error", (3, 1),
                 "删除选中的任务"),
-            ModernUIConfig.create_modern_button("🍅", "-FOCUS-", "error", (2, 1),
+            ModernUIConfig.create_modern_button("🍅", "-FOCUS-", "error", (3, 1),
                 "番茄钟专注模式 - 点击开始/停止"),
-            ModernUIConfig.create_modern_button("📊", "-STATS-", "primary", (2, 1),
+            ModernUIConfig.create_modern_button("📊", "-STATS-", "primary", (3, 1),
                 "查看今日和本周的专注统计"),
-            ModernUIConfig.create_modern_button("⚙", "-SETTINGS-", "warning", (2, 1),
+            ModernUIConfig.create_modern_button("⚙", "-SETTINGS-", "warning", (3, 1),
                 "打开设置 - 配置快捷键和提醒")
         ]
     
@@ -177,15 +182,24 @@ class UILayoutManager(ILayoutManager):
             sg.Text("2h", key="-DAILY_GOAL-", font=fonts['small'],
                    text_color=colors['text_secondary'], size=(2, 1),
                    tooltip="每日专注目标"),
-            sg.Text("🍅", key="-FOCUS_ICON-", font=fonts['small'],
-                   text_color=colors['text_disabled'], visible=False),
-            sg.Text("--:--", key="-FOCUS_TIMER-", font=fonts['small'],
-                   text_color=colors['error'], size=(5, 1), visible=False),
+            # 番茄钟计时器 - 增强显示
+            sg.Text("🍅", key="-FOCUS_ICON-", font=('Segoe UI', 12),
+                   text_color=colors['error'], visible=False),
+            sg.Text("--:--", key="-FOCUS_TIMER-", font=('Segoe UI', 14, 'bold'),
+                   text_color=colors['error'], size=(6, 1), visible=False,
+                   background_color=colors['surface']),
+            # 撤销按钮（默认隐藏）
+            sg.Button("↶ 撤销", key="-UNDO_DELETE-", visible=False,
+                     button_color=(colors['text'], colors['warning']),
+                     font=fonts['small'], border_width=0, size=(5, 1),
+                     tooltip="撤销删除操作 (U)"),
             sg.Push(),
-            sg.Text("⌨", font=fonts['small'], text_color=colors['text_disabled']),
-            sg.Text("C+A+空格", key="-HOTKEY_HINT-", font=fonts['small'],
-                   text_color=colors['primary'], size=(8, 1),
+            # 增强的快捷键提示
+            sg.Text("⌨", font=('Segoe UI', 10), text_color=colors['primary']),
+            sg.Text("Ctrl+Alt+空格", key="-HOTKEY_HINT-", font=('Segoe UI', 9, 'bold'),
+                   text_color=colors['warning'], size=(12, 1),
                    tooltip="按此快捷键快速切换任务"),
+            sg.Text("切换任务", font=('Segoe UI', 8), text_color=colors['text_secondary']),
             sg.Button("?", key="-HELP-", size=(2, 1),
                      button_color=(colors['text_secondary'], colors['surface']),
                      font=fonts['small'], border_width=0,
@@ -197,7 +211,8 @@ class UILayoutManager(ILayoutManager):
         # 获取现代化Widget配置
         window_config = ModernUIConfig.get_widget_window_config()
         window_config['layout'] = layout
-        
+        window_config['return_keyboard_events'] = True  # 启用键盘事件返回
+
         # 窗口位置设置
         if self.layout_provider:
             window_state_manager = self.layout_provider.get_window_state_manager()
@@ -205,10 +220,10 @@ class UILayoutManager(ILayoutManager):
                 restored_position = window_state_manager.restore_position()
                 if restored_position:
                     window_config["location"] = restored_position
-        
+
         # 创建窗口
         window = sg.Window(**window_config)
-        
+
         return window
     
     def setup_window_events(self, window: sg.Window) -> sg.Window:

@@ -48,6 +48,7 @@ class TableDataProvider(IDataProvider):
         # 搜索和筛选状态
         self.search_text = ""
         self.status_filter = None  # None表示全部
+        self.sort_by = "default"  # 排序方式: default, name, status, time
 
         # 缓存过滤后的任务索引映射 (表格行号 -> 原始任务索引)
         self._filtered_indices: List[int] = []
@@ -59,6 +60,20 @@ class TableDataProvider(IDataProvider):
     def set_status_filter(self, status_name: str) -> None:
         """设置状态筛选"""
         self.status_filter = STATUS_FILTER_MAP.get(status_name, None)
+
+    def set_sort_by(self, sort_by: str) -> None:
+        """设置排序方式
+
+        Args:
+            sort_by: 排序方式 (default/name/status/time)
+        """
+        sort_map = {
+            "默认": "default",
+            "名称": "name",
+            "状态": "status",
+            "今日时间": "time"
+        }
+        self.sort_by = sort_map.get(sort_by, "default")
 
     def get_original_index(self, table_row: int) -> int:
         """根据表格行号获取原始任务索引
@@ -74,13 +89,14 @@ class TableDataProvider(IDataProvider):
         return -1
 
     def _get_filtered_tasks(self) -> List[Tuple[int, Task]]:
-        """获取过滤后的任务列表
+        """获取过滤后的任务列表（支持排序）
 
         Returns:
             (原始索引, 任务) 元组列表
         """
         tasks = self.task_manager.get_all_tasks()
         filtered = []
+        time_tracker = get_time_tracker()
 
         for i, task in enumerate(tasks):
             # 状态筛选
@@ -99,6 +115,27 @@ class TableDataProvider(IDataProvider):
                     continue
 
             filtered.append((i, task))
+
+        # 根据排序方式对结果进行排序
+        if self.sort_by == "name":
+            # 按名称排序
+            filtered.sort(key=lambda x: x[1].name.lower())
+        elif self.sort_by == "status":
+            # 按状态排序（进行中 > 待办 > 其他）
+            status_priority = {
+                "in_progress": 1,
+                "todo": 2,
+                "review": 3,
+                "paused": 4,
+                "blocked": 5,
+                "completed": 6
+            }
+            filtered.sort(key=lambda x: status_priority.get(
+                x[1].status.value if hasattr(x[1].status, 'value') else str(x[1].status), 99
+            ))
+        elif self.sort_by == "time":
+            # 按今日专注时间排序（降序）
+            filtered.sort(key=lambda x: time_tracker.get_task_stats(x[1].id).today_seconds, reverse=True)
 
         return filtered
     
@@ -120,8 +157,8 @@ class TableDataProvider(IDataProvider):
 
             # 任务名称 - 适配调整后的列宽
             task_name = task.name
-            if len(task_name) > 12:
-                task_name = task_name[:10] + ".."
+            if len(task_name) > 16:
+                task_name = task_name[:14] + ".."
 
             # 绑定窗口数量
             valid_windows = sum(1 for w in task.bound_windows if w.is_valid)
@@ -134,20 +171,8 @@ class TableDataProvider(IDataProvider):
             else:
                 windows_info = f"{valid_windows}/{total_windows}"
 
-            # 任务状态 - 使用状态管理器的图标
-            if self.task_status_manager:
-                status_icon = self.task_status_manager.get_status_icon(task.status)
-                status = status_icon
-            else:
-                # 备用显示方案
-                if orig_idx == current_index:
-                    status = "🟢"  # 活跃 - 绿色圆点
-                elif total_windows > 0 and valid_windows == total_windows:
-                    status = "🔵"  # 就绪 - 蓝色圆点
-                elif valid_windows < total_windows:
-                    status = "🟡"  # 部分有效 - 黄色圆点
-                else:
-                    status = "⚪"  # 空闲 - 白色圆点
+            # 任务状态 - 增强显示，使用更多图标和颜色信息
+            status = self._get_enhanced_status_display(task, orig_idx, current_index, valid_windows, total_windows)
 
             # 获取今日专注时间
             stats = time_tracker.get_task_stats(task.id)
@@ -155,21 +180,69 @@ class TableDataProvider(IDataProvider):
 
             # 优先级图标
             priority = getattr(task, 'priority', 0)
-            priority_icons = {0: "", 1: "🔽", 2: "➖", 3: "🔺"}  # 普通、低、中、高
+            priority_icons = {0: "", 1: "����", 2: "➖", 3: "🔺"}  # 普通、低、中、高
             priority_icon = priority_icons.get(priority, "")
 
             # 新的6列格式：编号、优先级、任务名、窗口数、状态、今日时间
             table_data.append([task_num, priority_icon, task_name, windows_info, status, time_display])
 
         return table_data
+
+    def _get_enhanced_status_display(self, task, orig_idx, current_index, valid_windows, total_windows) -> str:
+        """获取增强的状态显示
+
+        Args:
+            task: 任务对象
+            orig_idx: 原始索引
+            current_index: 当前任务索引
+            valid_windows: 有效窗口数
+            total_windows: 总窗口数
+
+        Returns:
+            状态显示文本（带颜色标记）
+        """
+        # 首先使用状态管理器的图标
+        if self.task_status_manager:
+            status_icon = self.task_status_manager.get_status_icon(task.status)
+
+            # 根据状态添加颜色信息
+            status_value = task.status.value if hasattr(task.status, 'value') else str(task.status)
+
+            # 状态颜色映射
+            status_colors = {
+                "todo": "⚪",        # 待办 - 白色
+                "in_progress": "🔵", # 进行中 - 蓝色
+                "blocked": "🔴",     # 阻塞 - 红色
+                "review": "🟡",      # 审查中 - 黄色
+                "completed": "✅",    # 已完成 - 绿色勾
+                "paused": "⏸️",       # 已暂停 - 暂停符号
+            }
+
+            # 组合状态图标和颜色指示器
+            base_status = status_colors.get(status_value, status_icon)
+
+            # 当前任务额外标记
+            if orig_idx == current_index:
+                return f"▶{base_status}"  # 播放图标表示当前活跃
+
+            return base_status
+
+        # 备用显示方案
+        if orig_idx == current_index:
+            return "▶🟢"  # 活跃 - 绿色圆点
+        elif total_windows > 0 and valid_windows == total_windows:
+            return "🔵"  # 就绪 - 蓝色圆点
+        elif valid_windows < total_windows and valid_windows > 0:
+            return "🟡"  # 部分有效 - 黄色圆点
+        else:
+            return "⚪"  # 空闲 - 白色圆点
     
     def get_row_colors(self) -> List[tuple]:
-        """获取表格行颜色配置 - 使用FreeSimpleGUI正确的row_colors格式"""
+        """获取表格行颜色配置 - 增强版，根据任务状态设置不同颜色"""
         row_colors = []
         current_index = self.task_manager.current_task_index
         time_tracker = get_time_tracker()
 
-        # 使用缓存的过滤索引
         # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
         for table_row, orig_idx in enumerate(self._filtered_indices):
             task = self.task_manager.get_task_by_index(orig_idx)
@@ -179,15 +252,35 @@ class TableDataProvider(IDataProvider):
             # 获取任务的时间统计
             stats = time_tracker.get_task_stats(task.id)
 
+            # 根据任务状态设置颜色
             if orig_idx == current_index:
                 # 当前任务：绿色高亮
-                row_colors.append((table_row, '#00DD00', '#2D2D2D'))  # 亮绿色文字, 深灰背景
-            elif stats.today_seconds > 3600:  # 今日专注超过1小时
-                # 高效任务：蓝色
-                row_colors.append((table_row, '#4DA6FF', '#202020'))  # 亮蓝色文字
+                row_colors.append((table_row, '#00FF00', '#1a3a1a'))
             else:
-                # 普通任务：恢复默认白色
-                row_colors.append((table_row, '#FFFFFF', '#202020'))  # 白色文字, 默认背景
+                # 根据任务状态设置颜色
+                status_value = task.status.value if hasattr(task.status, 'value') else str(task.status)
+
+                if status_value == "in_progress":
+                    # 进行中：蓝色文字
+                    row_colors.append((table_row, '#66B2FF', '#202020'))
+                elif status_value == "completed":
+                    # 已完成：绿色文字（低饱和度）
+                    row_colors.append((table_row, '#888888', '#202020'))
+                elif status_value == "blocked":
+                    # 阻塞：红色文字
+                    row_colors.append((table_row, '#FF6B6B', '#202020'))
+                elif status_value == "review":
+                    # 审查中：黄色文字
+                    row_colors.append((table_row, '#FFD93D', '#202020'))
+                elif status_value == "paused":
+                    # 已暂停：灰色文字
+                    row_colors.append((table_row, '#999999', '#202020'))
+                elif stats.today_seconds > 3600:
+                    # 今日专注超过1小时：紫色文字表示高效
+                    row_colors.append((table_row, '#C77DFF', '#202020'))
+                else:
+                    # 普通任务：白色文字
+                    row_colors.append((table_row, '#FFFFFF', '#202020'))
 
         return row_colors
     

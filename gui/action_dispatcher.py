@@ -15,22 +15,37 @@ from core.time_tracker import get_time_tracker
 
 class IActionDispatcher(ABC):
     """业务动作调度器接口"""
-    
+
     @abstractmethod
     def update_display(self) -> None:
         """更新显示"""
         pass
-    
+
     @abstractmethod
-    def set_status(self, message: str, duration_ms: int = 0) -> None:
+    def set_status(self, message: str, duration_ms: int = 0, status_type: str = "info") -> None:
         """设置状态消息"""
         pass
-    
+
+    @abstractmethod
+    def set_status_success(self, message: str, duration_ms: int = 3000) -> None:
+        """设置成功状态消息"""
+        pass
+
+    @abstractmethod
+    def set_status_warning(self, message: str, duration_ms: int = 3000) -> None:
+        """设置警告状态消息"""
+        pass
+
+    @abstractmethod
+    def set_status_error(self, message: str, duration_ms: int = 5000) -> None:
+        """设置错误状态消息"""
+        pass
+
     @abstractmethod
     def on_task_changed(self, task: Task) -> None:
         """任务变化回调"""
         pass
-    
+
     @abstractmethod
     def on_task_switched(self, task: Task, index: int) -> None:
         """任务切换回调"""
@@ -231,26 +246,63 @@ class ActionDispatcher(IActionDispatcher):
         except:
             pass
     
-    def set_status(self, message: str, duration_ms: int = 0) -> None:
-        """设置状态消息
-        
+    def set_status(self, message: str, duration_ms: int = 0, status_type: str = "info") -> None:
+        """设置状态消息（支持不同类型和颜色）
+
         Args:
             message: 状态消息
             duration_ms: 显示时长（毫秒），0表示永久显示
+            status_type: 消息类型 (info/success/warning/error)
         """
         window = self.action_provider.get_window()
         if not window:
             return
-        
+
         try:
-            window["-STATUS-"].update(message)
-            
+            # 根据消息类型设置颜色
+            status_colors = {
+                "info": "#FFFFFF",      # 白色 - 普通信息
+                "success": "#00FF00",   # 绿色 - 成功
+                "warning": "#FFD700",   # 金色 - 警告
+                "error": "#FF6B6B",     # 红色 - 错误
+            }
+
+            text_color = status_colors.get(status_type, "#FFFFFF")
+
+            # 添加类型前缀
+            prefix_map = {
+                "success": "✅ ",
+                "warning": "⚠️ ",
+                "error": "❌ ",
+                "info": ""
+            }
+            prefix = prefix_map.get(status_type, "")
+
+            # 更新状态消息（不重复添加前缀）
+            display_message = message
+            if status_type != "info" and not any(message.startswith(p) for p in prefix_map.values()):
+                display_message = prefix + message
+
+            window["-STATUS-"].update(display_message, text_color=text_color)
+
             if duration_ms > 0:
                 # 记录状态清除时间，让主事件循环处理
                 self.status_clear_time = time.time() + (duration_ms / 1000.0)
-                
+
         except Exception as e:
             print(f"设置状态失败: {e}")
+
+    def set_status_success(self, message: str, duration_ms: int = 3000) -> None:
+        """设置成功状态消息"""
+        self.set_status(message, duration_ms, "success")
+
+    def set_status_warning(self, message: str, duration_ms: int = 3000) -> None:
+        """设置警告状态消息"""
+        self.set_status(message, duration_ms, "warning")
+
+    def set_status_error(self, message: str, duration_ms: int = 5000) -> None:
+        """设置错误状态消息"""
+        self.set_status(message, duration_ms, "error")
     
     def on_task_changed(self, task: Task) -> None:
         """任务变化回调"""

@@ -71,28 +71,29 @@ class WindowStateManager(IWindowManager):
         self.window_was_dragged = False
         self.last_mouse_pos: Optional[Tuple[int, int]] = None
         self.mouse_press_time: Optional[float] = None
-        
-        # 拖拽检测参数
-        self.drag_threshold = 3  # 拖拽检测阈值（像素）
+
+        # 拖拽检测参数 - 优化以减少误触
+        self.drag_threshold = 5  # 拖拽检测阈值（像素）- 从3增加到5
+        self.drag_time_threshold = 0.2  # 拖拽时间阈值（秒）- 少于200ms视为点击
         
         print("[OK] 窗口状态管理器初始化完成")
     
     def detect_drag(self) -> bool:
         """检测窗口是否被拖拽
-        
+
         Returns:
             bool: 当前是否处于拖拽状态
         """
         if not WIN32_AVAILABLE:
             return False
-            
+
         try:
             # 获取当前鼠标位置
             current_mouse_pos = win32api.GetCursorPos()
-            
+
             # 检查鼠标左键状态
             left_button_pressed = win32api.GetKeyState(0x01) < 0
-            
+
             if left_button_pressed:
                 # 鼠标按下，记录起始位置和时间
                 if self.last_mouse_pos is None:
@@ -100,10 +101,18 @@ class WindowStateManager(IWindowManager):
                     self.mouse_press_time = time.time()
                     self.window_was_dragged = False
                 else:
+                    # 计算鼠标按下的持续时间
+                    press_duration = time.time() - self.mouse_press_time if self.mouse_press_time else 0
+
+                    # 如果按下时间很短，视为点击而非拖拽
+                    if press_duration < self.drag_time_threshold:
+                        self.window_was_dragged = False
+                        return False
+
                     # 检查鼠标是否移动了
                     dx = abs(current_mouse_pos[0] - self.last_mouse_pos[0])
                     dy = abs(current_mouse_pos[1] - self.last_mouse_pos[1])
-                    
+
                     # 如果移动距离超过阈值，认为是拖拽
                     if dx > self.drag_threshold or dy > self.drag_threshold:
                         self.window_was_dragged = True
@@ -113,10 +122,10 @@ class WindowStateManager(IWindowManager):
                     self.last_mouse_pos = None
                     self.mouse_press_time = None
                     # 不立即重置 window_was_dragged，让事件处理器有时间检查
-                    
+
         except Exception as e:
             print(f"检查拖拽状态失败: {e}")
-        
+
         return self.window_was_dragged
     
     def reset_drag_state(self) -> None:

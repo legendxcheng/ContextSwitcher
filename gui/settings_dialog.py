@@ -55,16 +55,19 @@ class SettingsDialog:
         # 当前设置值
         self.idle_time_minutes = self.config.get_monitoring_config().get('idle_time_warning_minutes', 10)
         hotkey_config = self.config.get_hotkeys_config()
+        switcher_config = self.config.get_task_switcher_config()
         self.switcher_enabled = hotkey_config.get('switcher_enabled', True)
         self.switcher_modifiers = hotkey_config.get('switcher_modifiers', ['ctrl', 'alt'])
         self.switcher_key = hotkey_config.get('switcher_key', 'space')
-        
+        self.auto_close_delay = switcher_config.get('auto_close_delay', 2.0)
+
         # 原始设置备份（用于回滚）
         self.original_settings = {
             'idle_time_minutes': self.idle_time_minutes,
             'switcher_enabled': self.switcher_enabled,
             'switcher_modifiers': self.switcher_modifiers.copy(),
-            'switcher_key': self.switcher_key
+            'switcher_key': self.switcher_key,
+            'auto_close_delay': self.auto_close_delay
         }
         
         print("✓ 设置对话框初始化完成")
@@ -97,7 +100,7 @@ class SettingsDialog:
         icon_path = ModernUIConfig._get_icon_path()
         
         # 动态计算对话框位置
-        dialog_size = (480, 380)
+        dialog_size = (480, 480)  # 增加高度以容纳倒计时设置
         main_window_position = self._get_main_window_position()
         dialog_position = self.position_manager.get_settings_dialog_position(
             dialog_size, main_window_position
@@ -151,27 +154,37 @@ class SettingsDialog:
         
         # 任务切换器设置区域
         switcher_frame = [
-            [sg.Checkbox("启用任务切换器", key="-SWITCHER_ENABLED-", 
+            [sg.Checkbox("启用任务切换器", key="-SWITCHER_ENABLED-",
                         default=self.switcher_enabled, enable_events=True,
                         font=("Segoe UI", 10), text_color="#FFFFFF")],
             [sg.Text("切换器热键修饰键:", font=("Segoe UI", 10), text_color="#FFFFFF")],
-            [sg.Checkbox("Ctrl", key="-CTRL-", default="ctrl" in self.switcher_modifiers, 
+            [sg.Checkbox("Ctrl", key="-CTRL-", default="ctrl" in self.switcher_modifiers,
                         enable_events=True, font=("Segoe UI", 9)),
-             sg.Checkbox("Alt", key="-ALT-", default="alt" in self.switcher_modifiers, 
+             sg.Checkbox("Alt", key="-ALT-", default="alt" in self.switcher_modifiers,
                         enable_events=True, font=("Segoe UI", 9)),
-             sg.Checkbox("Shift", key="-SHIFT-", default="shift" in self.switcher_modifiers, 
+             sg.Checkbox("Shift", key="-SHIFT-", default="shift" in self.switcher_modifiers,
                         enable_events=True, font=("Segoe UI", 9)),
-             sg.Checkbox("Win", key="-WIN-", default="win" in self.switcher_modifiers, 
+             sg.Checkbox("Win", key="-WIN-", default="win" in self.switcher_modifiers,
                         enable_events=True, font=("Segoe UI", 9))],
             [sg.Text("触发键:", font=("Segoe UI", 9)),
              sg.Combo(["space", "tab", "enter"], default_value=self.switcher_key,
                      key="-SWITCHER_KEY-", enable_events=True, readonly=True,
                      font=("Segoe UI", 9), size=(8, 1))],
+            [sg.Text("倒计时时间:", font=("Segoe UI", 9), text_color="#FFFFFF")],
+            [sg.Input(str(self.auto_close_delay), key="-AUTO_CLOSE_DELAY-", size=(8, 1),
+                     enable_events=True),
+             sg.Text("秒", font=("Segoe UI", 9)),
+             sg.Text("(范围: 0.5-10秒)", font=("Segoe UI", 8), text_color="#888888")],
+            [sg.Text("快速选择:", font=("Segoe UI", 9)),
+             sg.Button("1秒", key="-DELAY_1-", size=(4, 1)),
+             sg.Button("2秒", key="-DELAY_2-", size=(4, 1)),
+             sg.Button("3秒", key="-DELAY_3-", size=(4, 1)),
+             sg.Button("5秒", key="-DELAY_5-", size=(4, 1))],
             [sg.Text("当前组合: ", font=("Segoe UI", 9)),
-             sg.Text(self._format_switcher_preview(), key="-HOTKEY_PREVIEW-", 
+             sg.Text(self._format_switcher_preview(), key="-HOTKEY_PREVIEW-",
                     font=("Segoe UI", 9), text_color="#0078D4")],
             [sg.Text("状态: ", font=("Segoe UI", 9)),
-             sg.Text("✅ 无冲突", key="-CONFLICT_STATUS-", 
+             sg.Text("✅ 无冲突", key="-CONFLICT_STATUS-",
                     font=("Segoe UI", 9), text_color="#107C10")]
         ]
         
@@ -233,6 +246,9 @@ class SettingsDialog:
                 
                 elif event in ["-QUICK_5-", "-QUICK_15-", "-QUICK_30-", "-QUICK_60-"]:
                     self._handle_quick_time_select(event)
+
+                elif event in ["-DELAY_1-", "-DELAY_2-", "-DELAY_3-", "-DELAY_5-"]:
+                    self._handle_delay_time_select(event)
                 
                 elif event in ["-CTRL-", "-ALT-", "-SHIFT-", "-WIN-", "-IDLE_TIME-", 
                               "-SWITCHER_ENABLED-", "-SWITCHER_KEY-"]:
@@ -247,14 +263,26 @@ class SettingsDialog:
         """处理快速时间选择"""
         time_map = {
             "-QUICK_5-": "5",
-            "-QUICK_15-": "15", 
+            "-QUICK_15-": "15",
             "-QUICK_30-": "30",
             "-QUICK_60-": "60"
         }
-        
+
         if event in time_map:
             self.dialog_window["-IDLE_TIME-"].update(time_map[event])
             self._update_interface()
+
+    def _handle_delay_time_select(self, event: str):
+        """处理倒计时时间快速选择"""
+        delay_map = {
+            "-DELAY_1-": "1.0",
+            "-DELAY_2-": "2.0",
+            "-DELAY_3-": "3.0",
+            "-DELAY_5-": "5.0"
+        }
+
+        if event in delay_map:
+            self.dialog_window["-AUTO_CLOSE_DELAY-"].update(delay_map[event])
     
     def _handle_setting_change(self, values: Dict[str, Any]):
         """处理设置变更"""
@@ -363,11 +391,21 @@ class SettingsDialog:
             except ValueError:
                 self.popup_manager.show_error("请输入有效的数字", "设置错误")
                 return False
-            
+
+            # 验证倒计时时间
+            try:
+                auto_close_delay = float(values["-AUTO_CLOSE_DELAY-"])
+                if not (0.5 <= auto_close_delay <= 10.0):
+                    self.popup_manager.show_error("倒计时时间必须在0.5-10秒范围内", "设置错误")
+                    return False
+            except ValueError:
+                self.popup_manager.show_error("请输入有效的倒计时时间", "设置错误")
+                return False
+
             # 验证任务切换器设置
             switcher_enabled = values.get("-SWITCHER_ENABLED-", True)
             switcher_key = values.get("-SWITCHER_KEY-", "space")
-            
+
             modifiers = []
             if values.get("-CTRL-", False):
                 modifiers.append("ctrl")
@@ -377,15 +415,15 @@ class SettingsDialog:
                 modifiers.append("shift")
             if values.get("-WIN-", False):
                 modifiers.append("win")
-            
+
             if switcher_enabled and not modifiers:
                 self.popup_manager.show_error("启用任务切换器时，至少需要选择一个修饰键", "设置错误")
                 return False
-            
+
             # 如果启用切换器，进行冲突检测
             if switcher_enabled and modifiers:
                 conflict_result = self.conflict_detector.check_hotkey_conflicts(modifiers)
-                
+
                 if conflict_result['severity'] == 'error':
                     # 严重冲突，不允许保存
                     conflicts_text = '\n'.join(conflict_result['conflicts'])
@@ -395,28 +433,28 @@ class SettingsDialog:
                     # 警告级冲突，询问用户是否继续
                     conflicts_text = '\n'.join(conflict_result['conflicts'])
                     suggestions_text = '\n'.join(conflict_result['suggestions'][:2])
-                    
+
                     result = self.popup_manager.show_question(
                         f"检测到潜在冲突:\n\n{conflicts_text}\n\n建议:\n{suggestions_text}\n\n是否继续保存此设置?",
                         "快捷键冲突警告"
                     )
                     if not result:
                         return False
-            
+
             # 保存设置
-            return self._apply_new_settings(idle_time, switcher_enabled, modifiers, switcher_key)
+            return self._apply_new_settings(idle_time, auto_close_delay, switcher_enabled, modifiers, switcher_key)
             
         except Exception as e:
             print(f"验证设置失败: {e}")
             self.popup_manager.show_error(f"保存设置失败: {e}", "错误")
             return False
     
-    def _apply_new_settings(self, idle_time: int, switcher_enabled: bool, 
-                          modifiers: List[str], switcher_key: str) -> bool:
+    def _apply_new_settings(self, idle_time: int, auto_close_delay: float,
+                          switcher_enabled: bool, modifiers: List[str], switcher_key: str) -> bool:
         """应用新设置"""
         try:
             switcher_combo = '+'.join(modifiers) + '+' + switcher_key if modifiers else "未设置"
-            print(f"🔧 应用新设置: 待机时间={idle_time}分钟, 切换器={switcher_enabled}, 热键={switcher_combo}")
+            print(f"🔧 应用新设置: 待机时间={idle_time}分钟, 切换器={switcher_enabled}, 热键={switcher_combo}, 倒计时={auto_close_delay}秒")
             
             # 创建配置备份
             backup_success = self._create_settings_backup()
@@ -432,7 +470,11 @@ class SettingsDialog:
             hotkeys_config['switcher_enabled'] = switcher_enabled
             hotkeys_config['switcher_modifiers'] = modifiers
             hotkeys_config['switcher_key'] = switcher_key
-            
+
+            # 更新任务切换器配置
+            switcher_config = self.config.get_task_switcher_config()
+            switcher_config['auto_close_delay'] = auto_close_delay
+
             # 保存配置文件
             self.config.save()
             

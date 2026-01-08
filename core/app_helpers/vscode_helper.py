@@ -454,23 +454,55 @@ class VSCodeHelper(BaseAppHelper):
         # 尝试在常见位置查找项目
         search_paths = self._get_common_project_locations()
 
+        # 收集所有匹配的候选路径
+        candidates = []
+
         for base_path in search_paths:
+            # 首先检查基础路径本身是否就是目标目录
+            # 例如：base_path = 'E:\ContextSwitcher', name_or_path = 'ContextSwitcher'
+            base_name = os.path.basename(base_path.rstrip(os.sep))
+            if base_name == name_or_path:
+                if os.path.isdir(base_path) and self._looks_like_project(base_path):
+                    candidates.append(base_path)
+                    continue  # 已经找到精确匹配，不需要再检查子目录
+
+            # 然后检查基础路径下的子目录
             candidate = os.path.join(base_path, name_or_path)
             if os.path.isdir(candidate):
                 # 验证是否看起来像项目目录
                 if self._looks_like_project(candidate):
-                    return candidate
+                    candidates.append(candidate)
 
-        # 如果是相对路径样式的名称（如 "folder [ssh: server]"），提取文件夹名
-        folder_match = re.match(r'^([^\[\]]+?)(?:\s*\[.+\])?$', name_or_path)
-        if folder_match:
-            folder_name = folder_match.group(1).strip()
-            for base_path in search_paths:
-                candidate = os.path.join(base_path, folder_name)
-                if os.path.isdir(candidate):
-                    return candidate
+        if not candidates:
+            # 如果是相对路径样式的名称（如 "folder [ssh: server]"），提取文件夹名
+            folder_match = re.match(r'^([^\[\]]+?)(?:\s*\[.+\])?$', name_or_path)
+            if folder_match:
+                folder_name = folder_match.group(1).strip()
+                for base_path in search_paths:
+                    candidate = os.path.join(base_path, folder_name)
+                    if os.path.isdir(candidate):
+                        candidates.append(candidate)
 
-        return None
+        if not candidates:
+            return None
+
+        # 如果有多个候选，优先选择非系统目���
+        # 系统目录特征：包含 AppData、Temp、Program Files 等
+        system_path_keywords = ['AppData', 'Application Data', 'Temp', 'Program Files', 'Windows', 'System32']
+        non_system_candidates = []
+        system_candidates = []
+
+        for candidate in candidates:
+            is_system = any(keyword.lower() in candidate.lower() for keyword in system_path_keywords)
+            if is_system:
+                system_candidates.append(candidate)
+            else:
+                non_system_candidates.append(candidate)
+
+        # 优先返回非系统目录
+        if non_system_candidates:
+            return non_system_candidates[0]
+        return system_candidates[0]
 
     def _get_common_project_locations(self) -> List[str]:
         """获取常见的项目存放位置
@@ -531,7 +563,8 @@ class VSCodeHelper(BaseAppHelper):
         # 例如 E:\, D:\ 等驱动器可能包含项目
         try:
             import string
-            for letter in string.ascii_uppercase:
+            # 只扫描前几个驱动器，避免扫描太多
+            for letter in string.ascii_uppercase[:5]:  # A-E
                 drive = f'{letter}:'
                 if os.path.exists(drive):
                     # 检查驱动器根目录下的常见项目文件夹
@@ -540,22 +573,19 @@ class VSCodeHelper(BaseAppHelper):
                         if os.path.isdir(drive_path) and drive_path not in locations:
                             locations.append(drive_path)
                     # 检查驱动器根目录下是否有直接的项目文件夹
-                    # （为了避免扫描太多，只检查一级子目录）
+                    # 注意：必须使用 drive + '\\' 来获取根目录，而不是 drive
                     try:
-                        for item in os.listdir(drive):
+                        root_path = drive + '\\'
+                        for item in os.listdir(root_path):
                             if item.startswith('.'):
                                 continue
-                            # 正确处理驱动器路径
-                            item_path = os.path.join(drive, item)
-                            # 确保路径格式正确（如 E:\ContextSwitcher）
-                            if not item.endswith(':') and not item.endswith('\\'):
-                                item_path = drive + '\\' + item
+                            item_path = os.path.join(root_path, item)
                             if os.path.isdir(item_path):
                                 # 检查是否看起来像项目目录
                                 if self._looks_like_project(item_path):
                                     if item_path not in locations:
                                         locations.append(item_path)
-                                # 限制��避免扫描太多目录
+                                # 限制避免扫描太多目录
                                 if len(locations) > 200:
                                     break
                         if len(locations) > 200:

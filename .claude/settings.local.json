@@ -5,7 +5,9 @@
       "Bash(python:*)",
       "Bash(timeout 5 python:*)",
       "Bash(python -m py_compile:*)",
-      "WebSearch"
+      "WebSearch",
+      "Bash(build.bat)",
+      "Bash(pyinstaller:*)"
     ],
     "deny": [],
     "ask": []
