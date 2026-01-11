@@ -60,7 +60,14 @@ class SwitchController:
                 
                 # 窗口间延迟，同时检查中止
                 if i < len(hwnds) - 1 and delay > 0:
-                    time.sleep(delay)
+                    # 分段延迟，更快响应中止
+                    sleep_steps = max(1, int(delay * 10))  # 100ms步长
+                    step_delay = delay / sleep_steps
+
+                    for _ in range(sleep_steps):
+                        if self._should_abort_switch(switch_id):
+                            break
+                        time.sleep(step_delay)
                     
             except Exception as e:
                 print(f"激活窗口时出错 {hwnd}: {e}")

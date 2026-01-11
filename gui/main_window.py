@@ -28,7 +28,8 @@ from core.task_manager import TaskManager, Task, TaskStatus
 from utils.config import get_config
 from gui.modern_config import ModernUIConfig
 from gui.table_data_provider import TableDataProvider, IDataProvider
-from gui.event_controller import EventController, IWindowActions
+from gui.interfaces.event_interfaces import IWindowActions
+from gui.event_controller import EventController
 from gui.window_state_manager import WindowStateManager, IWindowProvider
 from gui.notification_controller import NotificationController, INotificationProvider
 from gui.ui_layout_manager import UILayoutManager, ILayoutProvider

@@ -8,7 +8,11 @@
       "WebSearch",
       "Bash(build.bat)",
       "Bash(pyinstaller:*)",
-      "Bash(pip install:*)"
+      "Bash(pip install:*)",
+      "Bash(powershell:*)",
+      "Bash(del \"E:\\\\ContextSwitcher\\\\count_lines.py\")",
+      "Bash(cd:*)",
+      "Bash(dir:*)"
     ],
     "deny": [],
     "ask": []
