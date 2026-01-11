@@ -61,9 +61,11 @@ class ContextSwitcher:
         self.smart_rebind_manager = None
         self.task_status_manager = None
         self.task_switcher = None  # 新增：任务切换器
-        
+        self.tray_manager = None  # 新增：系统托盘管理器
+
         # 运行状态
         self.running = False
+        self.should_exit = False  # 标记是否应该退出程序（托盘退出菜单）
         
         print(f"{self.app_name} v{self.version} 启动中...")
     
@@ -112,7 +114,22 @@ class ContextSwitcher:
             from gui.task_switcher_dialog import TaskSwitcherDialog
             self.task_switcher = TaskSwitcherDialog(self.task_manager)
             print("  [OK] 任务切换器")
-            
+
+            # 初始化系统托盘
+            try:
+                from utils.tray_manager import create_tray_manager
+                self.tray_manager = create_tray_manager(self.app_name)
+                if self.tray_manager:
+                    # 设置托盘回调
+                    self.tray_manager.on_show = self._on_tray_show
+                    self.tray_manager.on_hide = self._on_tray_hide
+                    self.tray_manager.on_exit = self._on_tray_exit
+                    print("  [OK] 系统托盘")
+                else:
+                    print("  [INFO] 系统托盘不可用（pystray未安装）")
+            except Exception as e:
+                print(f"  [WARNING] 系统托盘初始化失败: {e}")
+
             print("[OK] 组件初始化完成")
             return True
             
@@ -222,6 +239,26 @@ class ContextSwitcher:
                 print("[OK] 欢迎引导完成")
         except Exception as e:
             print(f"显示欢迎引导失败: {e}")
+
+    # ========== 系统托盘回调方法 ==========
+
+    def _on_tray_show(self):
+        """托盘菜单：显示窗口"""
+        if self.main_window:
+            self.main_window.bring_to_front()
+
+    def _on_tray_hide(self):
+        """托盘菜单：隐藏窗口"""
+        if self.main_window:
+            self.main_window.hide()
+
+    def _on_tray_exit(self):
+        """托盘菜单：退出程序"""
+        # 设置退出标志
+        self.should_exit = True
+        # 停止主窗口事件循环
+        if self.main_window:
+            self.main_window.running = False
     
     def run(self):
         """运行主程序"""
@@ -237,21 +274,25 @@ class ContextSwitcher:
             # 首次运行显示欢迎引导
             self._show_welcome_if_needed()
 
+            # 启动系统托盘（在主窗口之前启动）
+            if self.tray_manager:
+                self.tray_manager.start()
+
             # 显示主窗口（创建窗口实例）
             print("启动主界面...")
             self.main_window.show()
-            
+
             # 在主窗口创建后注册热键（确保window对象存在）
             if not self.register_hotkeys():
                 print("警告: 热键注册失败，只能使用GUI操作")
-            
+
             # 运行主GUI事件循环
             self.running = True
             self.main_window.run()
-            
+
             print("程序正常退出")
             return True
-            
+
         except KeyboardInterrupt:
             print("用户中断程序")
             return True
@@ -324,6 +365,11 @@ class ContextSwitcher:
                 self.hotkey_manager.cleanup()
                 print("[OK] 热键已注销")
 
+            # 停止系统托盘
+            if self.tray_manager:
+                self.tray_manager.stop()
+                print("[OK] 系统托盘已停止")
+
             # 保存数据（最终保存，作为双重保险）
             if self.data_storage and self.task_manager:
                 print("[INFO] 执行退出时的最终保存（双重保险）...")
@@ -333,7 +379,7 @@ class ContextSwitcher:
                 else:
                     print("[ERROR] 任务数据保存失败")
 
-                # 保存时间追踪数据
+                # 保存时间追��数据
                 if self.data_storage.save_time_tracking(time_tracker):
                     print("[OK] 时间追踪数据已保存")
                 else:

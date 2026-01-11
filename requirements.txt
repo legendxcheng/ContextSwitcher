@@ -14,8 +14,8 @@ Pillow>=9.0.0
 # Toast Notifications (Windows 10/11)
 win10toast>=0.9
 
-# Optional: System Tray Support
-# FreeSimpleGUIWx>=0.1.0
+# System Tray Support
+pystray>=0.19.5
 
 # Development Dependencies (optional)
 # pytest>=7.0.0

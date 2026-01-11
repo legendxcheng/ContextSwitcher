@@ -83,11 +83,12 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         self.refresh_timer = None
         self.last_refresh = 0
         self.refresh_interval = 2.0  # 秒
-        
-        
-        
+        self.minimize_to_tray = True  # 关闭时最小化到托盘而非退出
+        self.is_hidden = False  # 窗口是否被隐藏到托盘
+
         # 事件回调
         self.on_window_closed: Optional[Callable] = None
+        self.on_minimize_to_tray: Optional[Callable] = None  # 最小化到托盘回调
         
         
         # 设置现代化主题
@@ -145,6 +146,44 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         """隐藏窗口"""
         if self.window:
             self.window.hide()
+            self.is_hidden = True
+
+    def bring_to_front(self):
+        """将窗口显示到屏幕最前方"""
+        if not self.window:
+            self.show()
+        else:
+            # 显示窗口
+            try:
+                self.window.un_hide()
+            except Exception:
+                # 如果 un_hide 失败，尝试其他方法
+                pass
+
+            # 将窗口置顶
+            try:
+                self.window.bring_to_front()
+            except Exception:
+                pass
+
+            # 确保窗口在最上层
+            try:
+                import win32gui
+                import win32con
+                hwnd = self.window.TKroot.winfo_id()
+                win32gui.SetWindowPos(
+                    hwnd,
+                    win32con.HWND_TOPMOST,
+                    0, 0, 0, 0,
+                    win32con.SWP_NOMOVE | win32con.SWP_NOSIZE | win32con.SWP_SHOWWINDOW
+                )
+            except Exception:
+                pass
+
+        self.is_hidden = False
+        self.running = True
+        self.action_dispatcher.update_display()
+        print("✓ 主窗口已显示到前台")
     
     def close(self):
         """关闭窗口"""
@@ -212,23 +251,39 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         """运行主事件循环"""
         if not self.window:
             self.show()
-        
+
         print("开始GUI事件循环...")
-        
+
         while self.running:
             try:
                 # 检查拖拽状态
                 was_dragged = self.window_state_manager.detect_drag()
-                
+
                 # 读取事件
                 event, values = self.window.read(timeout=50)  # 更短的超时以便及时检测拖拽
-                
+
                 # 处理事件
                 if event == sg.WIN_CLOSED:
-                    break
+                    # 如果启用托盘模式，关闭窗口时隐藏到托盘
+                    if self.minimize_to_tray:
+                        self.hide()
+                        if self.on_minimize_to_tray:
+                            self.on_minimize_to_tray()
+                        # 不退出循环，继续等待事件
+                        continue
+                    else:
+                        break
                 elif event == "-CLOSE-":
                     if not was_dragged:
-                        break
+                        # 如果启用托盘模式，关闭窗口时隐藏到托盘
+                        if self.minimize_to_tray:
+                            self.hide()
+                            if self.on_minimize_to_tray:
+                                self.on_minimize_to_tray()
+                            # 不退出循环，继续等待事件
+                            continue
+                        else:
+                            break
                     else:
                         self.window_state_manager.reset_drag_state()  # 重置拖拽状态
                 else:
@@ -236,14 +291,14 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
                     if self.event_controller:
                         # 同步拖拽状态到事件控制器
                         self.event_controller.set_drag_state(was_dragged)
-                        
+
                         # 处理事件
                         handled = self.event_controller.handle_event(event, values)
-                        
+
                         # 如果事件被处理，重置拖拽状态
                         if handled and was_dragged:
                             self.window_state_manager.reset_drag_state()
-                
+
                 # 定期刷新显示
                 current_time = time.time()
                 if current_time - self.last_refresh > self.refresh_interval:
@@ -260,11 +315,11 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
 
                 # 检查状态消息是否需要清除
                 self.action_dispatcher.check_status_clear(current_time)
-                
+
             except Exception as e:
                 print(f"GUI事件处理错误: {e}")
                 continue
-        
+
         print("GUI事件循环结束")
         self.close()
     
