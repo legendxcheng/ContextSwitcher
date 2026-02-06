@@ -1,0 +1,187 @@
+{
+  "version": "1.0.0",
+  "saved_at": "2026-01-11T16:06:15.108295",
+  "data": {
+    "sessions": [
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:04.393181",
+        "end_time": "2026-01-07T22:14:13.829024",
+        "duration_seconds": 9
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:13.829024",
+        "end_time": "2026-01-07T22:14:16.213282",
+        "duration_seconds": 2
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:16.213282",
+        "end_time": "2026-01-07T22:14:32.436153",
+        "duration_seconds": 16
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:32.436153",
+        "end_time": "2026-01-07T22:14:34.783448",
+        "duration_seconds": 2
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:34.783448",
+        "end_time": "2026-01-07T22:14:41.702335",
+        "duration_seconds": 6
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-07T22:14:41.702335",
+        "end_time": "2026-01-07T22:14:44.099514",
+        "duration_seconds": 2
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:14:44.099514",
+        "end_time": "2026-01-07T22:18:09.474557",
+        "duration_seconds": 205
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-07T22:18:09.474557",
+        "end_time": "2026-01-07T22:18:11.326120",
+        "duration_seconds": 1
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-07T22:18:11.326630",
+        "end_time": "2026-01-07T22:18:11.741890",
+        "duration_seconds": 0
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:18:11.741890",
+        "end_time": "2026-01-07T22:26:30.572680",
+        "duration_seconds": 498
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-07T22:26:41.806532",
+        "end_time": "2026-01-07T22:26:44.883966",
+        "duration_seconds": 3
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:26:44.883966",
+        "end_time": "2026-01-07T22:29:31.243802",
+        "duration_seconds": 166
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-07T22:29:41.355436",
+        "end_time": "2026-01-07T22:29:45.781461",
+        "duration_seconds": 4
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:29:45.782015",
+        "end_time": "2026-01-07T22:29:49.473091",
+        "duration_seconds": 3
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:29:49.473091",
+        "end_time": "2026-01-07T22:29:51.582916",
+        "duration_seconds": 2
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:29:51.582916",
+        "end_time": "2026-01-07T22:29:54.602569",
+        "duration_seconds": 3
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:29:54.603112",
+        "end_time": "2026-01-07T22:29:57.894131",
+        "duration_seconds": 3
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:29:57.894131",
+        "end_time": "2026-01-07T22:30:01.266455",
+        "duration_seconds": 3
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:30:01.266455",
+        "end_time": "2026-01-07T22:30:21.693854",
+        "duration_seconds": 20
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:30:21.693854",
+        "end_time": "2026-01-07T22:30:26.705322",
+        "duration_seconds": 5
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-07T22:30:26.705322",
+        "end_time": "2026-01-07T22:32:53.746035",
+        "duration_seconds": 147
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-11T15:11:46.825524",
+        "end_time": "2026-01-11T15:11:48.475579",
+        "duration_seconds": 1
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-11T15:11:48.475579",
+        "end_time": "2026-01-11T15:11:48.975805",
+        "duration_seconds": 0
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-11T15:11:48.975805",
+        "end_time": "2026-01-11T15:11:50.025840",
+        "duration_seconds": 1
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-11T15:11:50.026398",
+        "end_time": "2026-01-11T15:11:50.759446",
+        "duration_seconds": 0
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-11T15:11:50.759446",
+        "end_time": "2026-01-11T15:11:52.893809",
+        "duration_seconds": 2
+      },
+      {
+        "task_id": "task_1767795243137",
+        "start_time": "2026-01-11T15:11:52.893809",
+        "end_time": "2026-01-11T15:11:54.326304",
+        "duration_seconds": 1
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-11T15:11:54.326304",
+        "end_time": "2026-01-11T15:33:22.107297",
+        "duration_seconds": 1287
+      },
+      {
+        "task_id": "task_1767795268273",
+        "start_time": "2026-01-11T15:57:12.257204",
+        "end_time": "2026-01-11T16:05:49.612068",
+        "duration_seconds": 517
+      }
+    ],
+    "current_session": null,
+    "task_names": {
+      "task_1767795243137": "开发",
+      "task_1767795268273": "anti"
+    }
+  }
+}

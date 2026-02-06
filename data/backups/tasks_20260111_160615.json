@@ -1,0 +1,71 @@
+{
+  "version": "1.2.0",
+  "saved_at": "2026-01-11T16:06:15.084950",
+  "task_count": 2,
+  "tasks": [
+    {
+      "id": "task_1767795243137",
+      "name": "开发",
+      "description": "",
+      "status": "todo",
+      "bound_windows": [
+        {
+          "hwnd": 69132,
+          "title": "Wave",
+          "process_name": "Wave.exe",
+          "binding_time": "2026-01-07T22:14:03.137280",
+          "is_valid": true,
+          "folder_path": null,
+          "window_rect": [
+            1924,
+            547,
+            3844,
+            1579
+          ],
+          "app_type": "generic",
+          "working_directory": null,
+          "terminal_profile": null
+        }
+      ],
+      "created_at": "2026-01-07T22:14:03.137280",
+      "last_accessed": "2026-01-11T15:11:52.893809",
+      "access_count": 19,
+      "tags": [],
+      "priority": 0,
+      "notes": "",
+      "total_time_seconds": 1092
+    },
+    {
+      "id": "task_1767795268273",
+      "name": "anti",
+      "description": "",
+      "status": "todo",
+      "bound_windows": [
+        {
+          "hwnd": 133332,
+          "title": "game-client - Antigravity - BattleCameraSystem.ts",
+          "process_name": "Antigravity.exe",
+          "binding_time": "2026-01-07T22:14:28.273678",
+          "is_valid": false,
+          "folder_path": null,
+          "window_rect": [
+            0,
+            2,
+            1918,
+            1032
+          ],
+          "app_type": "generic",
+          "working_directory": null,
+          "terminal_profile": null
+        }
+      ],
+      "created_at": "2026-01-07T22:14:28.273678",
+      "last_accessed": "2026-01-11T15:57:12.257204",
+      "access_count": 10,
+      "tags": [],
+      "priority": 0,
+      "notes": "",
+      "total_time_seconds": 1817
+    }
+  ]
+}

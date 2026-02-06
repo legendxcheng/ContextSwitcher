@@ -30,7 +30,8 @@ class Config:
                 "version": "1.0.0",
                 "theme": "DefaultNoMoreNagging",
                 "language": "zh_CN",
-                "first_run": True  # 首次运行标记
+                "first_run": True,  # 首次运行标记
+                "use_qt": True  # UI后端：True=PySide6, False=FreeSimpleGUI
             },
             "window": {
                 "width": 600,

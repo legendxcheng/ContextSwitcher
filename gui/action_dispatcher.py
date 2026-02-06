@@ -180,7 +180,8 @@ class ActionDispatcher(IActionDispatcher):
         else:
             status = f"{task_count} 个任务"
 
-        window["-STATUS-"].update(status)
+        if self._has_status_element(window):
+            window["-STATUS-"].update(status)
 
         # 更新今日总专注时间和目标进度
         today_total = time_tracker.get_today_display()
@@ -257,6 +258,8 @@ class ActionDispatcher(IActionDispatcher):
         window = self.action_provider.get_window()
         if not window:
             return
+        if not self._has_status_element(window):
+            return
 
         try:
             # 根据消息类型设置颜色
@@ -328,7 +331,7 @@ class ActionDispatcher(IActionDispatcher):
         if self.status_clear_time > 0 and current_time >= self.status_clear_time:
             try:
                 window = self.action_provider.get_window()
-                if window:
+                if window and self._has_status_element(window):
                     window["-STATUS-"].update("就绪")
                     self.status_clear_time = 0  # 重置清除时间
             except Exception as e:
@@ -388,6 +391,13 @@ class ActionDispatcher(IActionDispatcher):
         self.preserved_selection = None
         self.status_clear_time = 0
         print("✓ 所有状态已清除")
+
+    def _has_status_element(self, window) -> bool:
+        """检查状态显示组件是否存在"""
+        try:
+            return window is not None and "-STATUS-" in window.AllKeysDict
+        except Exception:
+            return False
     
     def _auto_save_tasks(self) -> bool:
         """自动保存任务数据（线程安全）

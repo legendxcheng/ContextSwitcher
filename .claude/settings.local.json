@@ -12,7 +12,9 @@
       "Bash(powershell:*)",
       "Bash(del \"E:\\\\ContextSwitcher\\\\count_lines.py\")",
       "Bash(cd:*)",
-      "Bash(dir:*)"
+      "Bash(dir:*)",
+      "WebFetch(domain:stackoverflow.com)",
+      "WebFetch(domain:docs.waveterm.dev)"
     ],
     "deny": [],
     "ask": []

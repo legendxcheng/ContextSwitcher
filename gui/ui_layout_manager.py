@@ -103,8 +103,6 @@ class UILayoutManager(ILayoutManager):
     def _create_status_row(self, colors: Dict[str, str], fonts: Dict[str, tuple]) -> List[Any]:
         """创建状态行"""
         return [
-            sg.Text("", key="-STATUS-", font=fonts['body'],
-                   text_color=colors['text_secondary']),
             sg.Push(),
             sg.Text("●", key="-INDICATOR-", font=("Segoe UI", 12),
                    text_color=colors['success'], tooltip="就绪"),
