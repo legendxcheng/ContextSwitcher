@@ -22,27 +22,6 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
-def _is_truthy(value) -> bool:
-    if value is None:
-        return False
-    if isinstance(value, bool):
-        return value
-    if isinstance(value, (int, float)):
-        return value != 0
-    return str(value).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def _get_use_qt() -> bool:
-    env_value = os.environ.get("CONTEXT_SWITCHER_USE_QT")
-    if env_value is not None:
-        return _is_truthy(env_value)
-    try:
-        from utils.config import get_config
-        config = get_config()
-        return _is_truthy(config.get("app.use_qt", True))
-    except Exception:
-        return True
-
 
 class ContextSwitcher:
     """ContextSwitcher主应用类"""
@@ -51,7 +30,6 @@ class ContextSwitcher:
         """初始化应用"""
         self.version = "1.2.0"  # v1.2.0: 智能窗口恢复 (Terminal/VS Code支持)
         self.app_name = "ContextSwitcher"
-        self.use_qt = _get_use_qt()
         
         # 核心组件 - 稍后导入
         self.task_manager = None
@@ -61,7 +39,6 @@ class ContextSwitcher:
         self.smart_rebind_manager = None
         self.task_status_manager = None
         self.task_switcher = None  # 新增：任务切换器
-        self.tray_manager = None  # 新增：系统托盘管理器
         self.tray_icon = None  # PySide6 系统托盘
         self.qt_app = None
         self.qt_hotkey_proxy = None
@@ -76,79 +53,7 @@ class ContextSwitcher:
     
     def initialize_components(self):
         """初始化各个组件"""
-        if self.use_qt:
-            return self._initialize_qt_components()
-        return self._initialize_fsg_components()
-
-    def _initialize_fsg_components(self):
-        """初始化 FreeSimpleGUI 组件"""
-        try:
-            from core.task_manager import TaskManager
-            from core.hotkey_manager import HotkeyManager
-            from core.smart_rebind_manager import SmartRebindManager
-            from core.task_status_manager import TaskStatusManager
-            from gui.main_window import MainWindow
-            from utils.data_storage import DataStorage
-
-            print("正在初始化组件...")
-
-            # 初始化数据存储
-            self.data_storage = DataStorage()
-            print("  [OK] 数据存储模块")
-
-            # 初始化任务管理器
-            self.task_manager = TaskManager()
-            print("  [OK] 任务管理器")
-
-            # 初始化热键管理器
-            self.hotkey_manager = HotkeyManager(self.task_manager)
-            globals()["hotkey_manager"] = self.hotkey_manager
-            print("  [OK] 热键管理器")
-
-            # 初始化智能重新绑定管理器
-            self.smart_rebind_manager = SmartRebindManager(
-                self.task_manager, self.task_manager.window_manager
-            )
-            print("  [OK] 智能重新绑定管理器")
-
-            # 初始化任务状态管理器
-            self.task_status_manager = TaskStatusManager(self.task_manager)
-            print("  [OK] 任务状态管理器")
-
-            # 初始化主窗口（传递 data_storage 以支持自动保存）
-            self.main_window = MainWindow(self.task_manager, self.data_storage)
-            self.main_window.smart_rebind_manager = self.smart_rebind_manager
-            self.main_window.task_status_manager = self.task_status_manager
-            self.main_window.on_window_closed = self.cleanup
-            print("  [OK] 主窗口")
-
-            # 初始化任务切换器
-            from gui.task_switcher_dialog import TaskSwitcherDialog
-            self.task_switcher = TaskSwitcherDialog(self.task_manager)
-            print("  [OK] 任务切换器")
-
-            # 初始化系统托盘
-            try:
-                from utils.tray_manager import create_tray_manager
-                self.tray_manager = create_tray_manager(self.app_name)
-                if self.tray_manager:
-                    # 设置托盘回调
-                    self.tray_manager.on_show = self._on_tray_show
-                    self.tray_manager.on_hide = self._on_tray_hide
-                    self.tray_manager.on_exit = self._on_tray_exit
-                    print("  [OK] 系统托盘")
-                else:
-                    print("  [INFO] 系统托盘不可用（pystray未安装）")
-            except Exception as e:
-                print(f"  [WARNING] 系统托盘初始化失败: {e}")
-
-            print("[OK] 组件初始化完成")
-            return True
-
-        except Exception as e:
-            print(f"[ERROR] 组件初始化失败: {e}")
-            traceback.print_exc()
-            return False
+        return self._initialize_qt_components()
 
     def _initialize_qt_components(self):
         """初始化 PySide6 组件"""
@@ -358,25 +263,12 @@ class ContextSwitcher:
         """注册全局热键"""
         try:
             # 设置主窗口引用到热键管理器（用于线程安全通信）
-            if self.use_qt:
-                if self.qt_hotkey_proxy:
-                    self.hotkey_manager.set_main_window(self.qt_hotkey_proxy)
-                    print("[OK] 热键管理器已连接到 Qt 代理")
-                else:
-                    print("⚠️ Qt 热键代理未初始化，使用备用回调方案")
-                    self.hotkey_manager.on_switcher_triggered = self.show_task_switcher
+            if self.qt_hotkey_proxy:
+                self.hotkey_manager.set_main_window(self.qt_hotkey_proxy)
+                print("[OK] 热键管理器已连接到 Qt 代理")
             else:
-                if self.main_window and self.main_window.window:
-                    self.hotkey_manager.set_main_window(self.main_window.window)
-                    print("[OK] 热键管理器已连接到主窗口")
-                else:
-                    print("⚠️ 主窗口未创建，使用备用回调方案")
-                    # 设置切换器回调作为备用方案
-                    self.hotkey_manager.on_switcher_triggered = self.show_task_switcher
-
-            # 设置主窗口的热键回调（仅 FreeSimpleGUI）
-            if self.main_window and not self.use_qt:
-                self.main_window.on_hotkey_switcher_triggered = self.show_task_switcher
+                print("⚠️ Qt 热键代理未初始化，使用备用回调方案")
+                self.hotkey_manager.on_switcher_triggered = self.show_task_switcher
 
             # 备用回调（用于异常兜底）
             self.hotkey_manager.on_switcher_triggered = self.show_task_switcher
@@ -404,18 +296,12 @@ class ContextSwitcher:
                 main_window_position = None
                 if self.main_window:
                     try:
-                        if self.use_qt:
-                            pos = self.main_window.pos()
-                            main_window_position = (pos.x(), pos.y())
-                        else:
-                            main_window_position = self.main_window.window_state_manager.get_current_window_position()
+                        pos = self.main_window.pos()
+                        main_window_position = (pos.x(), pos.y())
                     except Exception:
                         pass
 
-                if self.use_qt:
-                    result = self.task_switcher.show_switcher(main_window_position)
-                else:
-                    result = self.task_switcher.show(main_window_position)
+                result = self.task_switcher.show_switcher(main_window_position)
                 if result:
                     print("✅ 任务切换器执行成功")
                 else:
@@ -430,17 +316,9 @@ class ContextSwitcher:
     def _show_welcome_if_needed(self):
         """如果是首次运行，显示欢迎引导"""
         try:
-            if self.use_qt:
-                from gui.qt.qt_welcome_dialog import show_welcome_if_first_run
-                if show_welcome_if_first_run(self.main_window):
-                    print("[OK] 欢迎引导完成")
-            else:
-                from gui.welcome_dialog import WelcomeDialog
-                welcome = WelcomeDialog()
-                if welcome.should_show():
-                    print("显示首次运行欢迎引导...")
-                    welcome.show()
-                    print("[OK] 欢迎引导完成")
+            from gui.qt.qt_welcome_dialog import show_welcome_if_first_run
+            if show_welcome_if_first_run(self.main_window):
+                print("[OK] 欢迎引导完成")
         except Exception as e:
             print(f"显示欢迎引导失败: {e}")
 
@@ -449,82 +327,23 @@ class ContextSwitcher:
     def _on_tray_show(self):
         """托盘菜单：显示窗口"""
         if self.main_window:
-            if self.use_qt:
-                self.main_window.show_from_tray()
-            else:
-                self.main_window.bring_to_front()
+            self.main_window.show_from_tray()
 
     def _on_tray_hide(self):
         """托盘菜单：隐藏窗口"""
         if self.main_window:
-            if self.use_qt:
-                self.main_window.hide_to_tray()
-            else:
-                self.main_window.hide()
+            self.main_window.hide_to_tray()
 
     def _on_tray_exit(self):
         """托盘菜单：退出程序"""
         # 设置退出标志
         self.should_exit = True
-        if self.use_qt:
-            if self.qt_app:
-                self.qt_app.quit()
-        else:
-            # 停止主窗口事件循环
-            if self.main_window:
-                self.main_window.running = False
+        if self.qt_app:
+            self.qt_app.quit()
     
     def run(self):
         """运行主程序"""
-        if self.use_qt:
-            return self._run_qt()
-        return self._run_fsg()
-
-    def _run_fsg(self):
-        """运行 FreeSimpleGUI 版本"""
-        try:
-            # 初始化组件
-            if not self.initialize_components():
-                return False
-
-            # 加载数据
-            if not self.load_data():
-                print("警告: 数据加载失败，将使用空数据启动")
-
-            if self.main_window:
-                self.main_window.update_display()
-
-            # 首次运行显示欢迎引导
-            self._show_welcome_if_needed()
-
-            # 启动系统托盘（在主窗口之前启动）
-            if self.tray_manager:
-                self.tray_manager.start()
-
-            # 显示主窗口（创建窗口实例）
-            print("启动主界面...")
-            self.main_window.show()
-
-            # 在主窗口创建后注册热键（确保window对象存在）
-            if not self.register_hotkeys():
-                print("警告: 热键注册失败，只能使用GUI操作")
-
-            # 运行主GUI事件循环
-            self.running = True
-            self.main_window.run()
-
-            print("程序正常退出")
-            return True
-
-        except KeyboardInterrupt:
-            print("用户中断程序")
-            return True
-        except Exception as e:
-            print(f"程序运行时错误: {e}")
-            traceback.print_exc()
-            return False
-        finally:
-            self.cleanup()
+        return self._run_qt()
     
     def _run_qt(self):
         """运行 PySide6 版本"""
@@ -596,48 +415,6 @@ class ContextSwitcher:
         finally:
             self.cleanup()
 
-    def run_temp_gui(self):
-        """临时GUI测试 - 验证FreeSimpleGUI是否正常工作"""
-        try:
-            import FreeSimpleGUI as sg
-        except ImportError:
-            print("错误: 请先安装FreeSimpleGUI")
-            print("运行: pip install FreeSimpleGUI")
-            return
-
-        sg.theme('DefaultNoMoreNagging')
-        
-        layout = [
-            [sg.Text(f"{self.app_name} v{self.version}", font=("Arial", 16))],
-            [sg.Text("项目结构创建完成!")],
-            [sg.Text("状态: 等待功能模块开发...")],
-            [sg.Multiline(
-                "[OK] 项目目录结构已创建\n"
-                "[OK] requirements.txt已生成\n"
-                "[OK] __init__.py文件已创建\n"
-                "[OK] main.py入口文件已创建\n"
-                "\n下一步:\n"
-                "- 实现window_manager.py\n"
-                "- 实现task_manager.py\n"
-                "- 实现主界面GUI",
-                size=(50, 10),
-                disabled=True
-            )],
-            [sg.Button("确定", key="-OK-"), sg.Button("退出", key="-EXIT-")]
-        ]
-        
-        window = sg.Window(self.app_name, layout, 
-                          keep_on_top=True,
-                          finalize=True)
-        
-        while True:
-            event, values = window.read()
-            
-            if event in (sg.WIN_CLOSED, "-EXIT-", "-OK-"):
-                break
-        
-        window.close()
-    
     def cleanup(self):
         """清理资源"""
         try:
@@ -667,9 +444,6 @@ class ContextSwitcher:
                 print("[OK] 热键已注销")
 
             # 停止系统托盘
-            if self.tray_manager:
-                self.tray_manager.stop()
-                print("[OK] 系统托盘已停止")
             if self.tray_icon:
                 try:
                     self.tray_icon.hide()

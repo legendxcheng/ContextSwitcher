@@ -1,6 +1,6 @@
 # ContextSwitcher Dependencies
 # GUI Framework
-FreeSimpleGUI>=5.2.0
+PySide6>=6.6.0
 
 # Windows API Integration
 pywin32>=306

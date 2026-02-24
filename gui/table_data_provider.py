@@ -258,7 +258,7 @@ class TableDataProvider(IDataProvider):
         current_index = self.task_manager.current_task_index
         time_tracker = get_time_tracker()
 
-        # FreeSimpleGUI的row_colors格式: (row_number, foreground_color, background_color)
+        # 行颜色格式: (row_number, foreground_color, background_color)
         for table_row, orig_idx in enumerate(self._filtered_indices):
             task = self.task_manager.get_task_by_index(orig_idx)
             if not task:

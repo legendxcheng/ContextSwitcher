@@ -94,7 +94,7 @@ ContextSwitcher is a Windows desktop application designed for developers to mana
 - 窗口操作通过消息队列进行线程安全处理
 
 ### Dependencies
-- **FreeSimpleGUI**: GUI框架
+- **PySide6**: GUI框架
 - **pywin32**: Windows API访问
 - **pynput**: 全局热键监听
 - **Pillow**: 图像处理（图标转换）
