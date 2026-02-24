@@ -9,6 +9,7 @@
 """
 
 from typing import List, Dict, Any, Optional
+import os
 import traceback
 import time
 
@@ -60,6 +61,7 @@ class SettingsDialog:
         self.switcher_modifiers = hotkey_config.get('switcher_modifiers', ['ctrl', 'alt'])
         self.switcher_key = hotkey_config.get('switcher_key', 'space')
         self.auto_close_delay = switcher_config.get('auto_close_delay', 2.0)
+        self.wave_exe_path = self.config.get('integrations.wave.exe_path', "")
 
         # 原始设置备份（用于回滚）
         self.original_settings = {
@@ -67,7 +69,8 @@ class SettingsDialog:
             'switcher_enabled': self.switcher_enabled,
             'switcher_modifiers': self.switcher_modifiers.copy(),
             'switcher_key': self.switcher_key,
-            'auto_close_delay': self.auto_close_delay
+            'auto_close_delay': self.auto_close_delay,
+            'wave_exe_path': self.wave_exe_path
         }
         
         print("✓ 设置对话框初始化完成")
@@ -187,6 +190,13 @@ class SettingsDialog:
              sg.Text("✅ 无冲突", key="-CONFLICT_STATUS-",
                     font=("Segoe UI", 9), text_color="#107C10")]
         ]
+
+        # Wave 集成设置区域
+        wave_frame = [
+            [sg.Text("Wave.exe 路径:", font=("Segoe UI", 10), text_color="#FFFFFF")],
+            [sg.Input(self.wave_exe_path, key="-WAVE_EXE_PATH-", size=(36, 1)),
+             sg.FileBrowse("浏览", key="-BROWSE_WAVE_EXE-", file_types=(("Wave.exe", "Wave.exe"), ("可执行文件", "*.exe"), ("所有文件", "*.*")))]
+        ]
         
         # 按钮区域
         button_row = [
@@ -213,6 +223,11 @@ class SettingsDialog:
             # 任务切换器设置
             [sg.Text("任务切换器设置", font=("Segoe UI", 10, "bold"), text_color="#CCCCCC")],
             *switcher_frame,
+            [sg.Text("")],  # 间隔
+
+            # Wave 集成
+            [sg.Text("Wave 集成", font=("Segoe UI", 10, "bold"), text_color="#CCCCCC")],
+            *wave_frame,
             [sg.Text("")],  # 间隔
             
             [sg.HorizontalSeparator()],
@@ -441,8 +456,15 @@ class SettingsDialog:
                     if not result:
                         return False
 
+            wave_exe_path = values.get("-WAVE_EXE_PATH-", "").strip()
+            if wave_exe_path and not os.path.isfile(wave_exe_path):
+                self.popup_manager.show_error("Wave.exe 路径无效，请检查后再保存", "设置错误")
+                return False
+
             # 保存设置
-            return self._apply_new_settings(idle_time, auto_close_delay, switcher_enabled, modifiers, switcher_key)
+            return self._apply_new_settings(
+                idle_time, auto_close_delay, switcher_enabled, modifiers, switcher_key, wave_exe_path
+            )
             
         except Exception as e:
             print(f"验证设置失败: {e}")
@@ -450,7 +472,8 @@ class SettingsDialog:
             return False
     
     def _apply_new_settings(self, idle_time: int, auto_close_delay: float,
-                          switcher_enabled: bool, modifiers: List[str], switcher_key: str) -> bool:
+                          switcher_enabled: bool, modifiers: List[str], switcher_key: str,
+                          wave_exe_path: str) -> bool:
         """应用新设置"""
         try:
             switcher_combo = '+'.join(modifiers) + '+' + switcher_key if modifiers else "未设置"
@@ -474,6 +497,9 @@ class SettingsDialog:
             # 更新任务切换器配置
             switcher_config = self.config.get_task_switcher_config()
             switcher_config['auto_close_delay'] = auto_close_delay
+
+            wave_config = self.config.get('integrations.wave', {})
+            wave_config['exe_path'] = wave_exe_path
 
             # 保存配置文件
             self.config.save()
@@ -505,6 +531,7 @@ class SettingsDialog:
             current_config = {
                 'monitoring': self.config.get_monitoring_config().copy(),
                 'hotkeys': self.config.get_hotkeys_config().copy(),
+                'integrations': {'wave': self.config.get('integrations.wave', {}).copy()},
                 'backup_timestamp': time.time()
             }
             
@@ -541,6 +568,10 @@ class SettingsDialog:
                 # 恢复快捷键配置
                 hotkeys_config = self.config.get_hotkeys_config()
                 hotkeys_config.update(backup_config['hotkeys'])
+
+                if 'integrations' in backup_config and 'wave' in backup_config['integrations']:
+                    wave_config = self.config.get('integrations.wave', {})
+                    wave_config.update(backup_config['integrations']['wave'])
                 
                 print("✅ 从备份文件恢复设置")
             else:
@@ -550,6 +581,9 @@ class SettingsDialog:
                 
                 hotkeys_config = self.config.get_hotkeys_config()
                 hotkeys_config['modifiers'] = self.original_settings['hotkey_modifiers']
+
+                wave_config = self.config.get('integrations.wave', {})
+                wave_config['exe_path'] = self.original_settings['wave_exe_path']
                 
                 print("✅ 从内存恢复原始设置")
             
@@ -568,7 +602,10 @@ class SettingsDialog:
                 
                 hotkeys_config = self.config.get_hotkeys_config()
                 hotkeys_config['modifiers'] = self.original_settings['hotkey_modifiers']
-                
+
+                wave_config = self.config.get('integrations.wave', {})
+                wave_config['exe_path'] = self.original_settings['wave_exe_path']
+
                 self.config.save()
                 print("✅ 使用内存备份恢复设置")
             except Exception as fallback_error:
@@ -621,6 +658,7 @@ class SettingsDialog:
             self.dialog_window["-SHIFT-"].update(False)
             self.dialog_window["-WIN-"].update(False)
             self.dialog_window["-SWITCHER_KEY-"].update("space")
+            self.dialog_window["-WAVE_EXE_PATH-"].update("")
             
             # 更新界面
             self._update_interface({

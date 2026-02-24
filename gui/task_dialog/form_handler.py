@@ -19,6 +19,7 @@ class TaskFormData:
     status: TaskStatus = TaskStatus.TODO
     priority: int = 0
     notes: str = ""
+    wave_workspace: str = ""
     tags: List[str] = None
 
     def __post_init__(self):
@@ -70,6 +71,7 @@ class TaskFormHandler:
             status=task.status,
             priority=getattr(task, 'priority', 0),
             notes=getattr(task, 'notes', ""),
+            wave_workspace=getattr(task, 'wave_workspace', "") or "",
             tags=getattr(task, 'tags', []) or []
         )
 
@@ -82,6 +84,7 @@ class TaskFormHandler:
         self.form_data.name = values.get("-TASK_NAME-", "").strip()
         self.form_data.description = values.get("-TASK_DESC-", "").strip()
         self.form_data.notes = values.get("-TASK_NOTES-", "").strip()
+        self.form_data.wave_workspace = values.get("-TASK_WAVE_WORKSPACE-", "").strip()
 
         # 转换状态
         status_text = values.get("-TASK_STATUS-", "待办")
@@ -150,6 +153,7 @@ class TaskFormHandler:
                 status=self.form_data.status,
                 priority=self.form_data.priority,
                 notes=self.form_data.notes,
+                wave_workspace=self.form_data.wave_workspace,
                 tags=self.form_data.tags
             )
 
@@ -173,6 +177,7 @@ class TaskFormHandler:
             window_hwnds=window_hwnds,
             priority=self.form_data.priority,
             notes=self.form_data.notes,
+            wave_workspace=self.form_data.wave_workspace,
             tags=self.form_data.tags
         )
 
@@ -201,6 +206,7 @@ class TaskFormHandler:
                 self.PRIORITY_MAP["普通"]
             ),
             "task_notes": self.form_data.notes,
+            "task_wave_workspace": self.form_data.wave_workspace,
             "task_tags": tags_display
         }
 

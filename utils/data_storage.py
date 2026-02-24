@@ -58,7 +58,7 @@ class DataStorage:
             
             # 创建完整的数据结构
             data = {
-                "version": "1.2.0",  # v1.2.0: 支持智能窗口恢复 (app_type, working_directory, terminal_profile)
+                "version": "1.3.0",  # v1.3.0: 支持任务级 todo_items
                 "saved_at": datetime.now().isoformat(),
                 "task_count": len(tasks_data),
                 "tasks": tasks_data
@@ -146,7 +146,7 @@ class DataStorage:
             
             # 数据版本检查和迁移
             version = data.get("version", "unknown")
-            if version in ["1.0.0", "1.1.0"]:
+            if version in ["1.0.0", "1.1.0", "1.2.0", "1.3.0"]:
                 # 支持的版本，正常加载
                 pass
             elif version == "unknown":

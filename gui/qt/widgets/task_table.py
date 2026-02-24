@@ -79,6 +79,7 @@ class TaskTableWidget(QTableWidget):
         3: "🟢",  # 低
         0: "⚪",  # 无
     }
+    WAVE_WORKSPACE_ICON = "🌊"
     SELECTED_PRIORITY_ICON = "🟢"
 
     def __init__(self, parent=None):
@@ -300,7 +301,10 @@ class TaskTableWidget(QTableWidget):
                 continue
 
             if col == 0:
-                item.setText(self.SELECTED_PRIORITY_ICON if is_selected else self._get_priority_icon(task))
+                if self._has_wave_workspace(task):
+                    item.setText(self.WAVE_WORKSPACE_ICON)
+                else:
+                    item.setText(self.SELECTED_PRIORITY_ICON if is_selected else self._get_priority_icon(task))
                 item.setForeground(QColor(self.SELECTED_TEXT_COLOR if is_selected else self._get_priority_color(task)))
                 continue
 
@@ -326,7 +330,18 @@ class TaskTableWidget(QTableWidget):
 
     def _get_priority_icon(self, task) -> str:
         """获取P列优先级图标"""
+        if self._has_wave_workspace(task):
+            return self.WAVE_WORKSPACE_ICON
         return self.PRIORITY_ICONS.get(getattr(task, 'priority', 0), "⚪")
+
+    def _has_wave_workspace(self, task) -> bool:
+        """判断任务是否绑定了 Wave workspace"""
+        workspace = getattr(task, 'wave_workspace', None)
+        if workspace is None:
+            return False
+        if isinstance(workspace, str):
+            return workspace.strip() != ""
+        return bool(workspace)
 
     def _is_task_overdue(self, task) -> bool:
         """判断任务是否超时未点击"""

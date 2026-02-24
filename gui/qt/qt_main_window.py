@@ -9,10 +9,12 @@ from datetime import datetime
 from typing import Optional, TYPE_CHECKING, List
 
 from PySide6.QtWidgets import (
-    QWidget, QLabel, QPushButton,
-    QComboBox, QHBoxLayout, QVBoxLayout
+    QWidget, QLabel, QPushButton, QLineEdit,
+    QComboBox, QHBoxLayout, QVBoxLayout, QFrame,
+    QListWidget, QListWidgetItem
 )
-from PySide6.QtCore import Qt, QTimer, Signal, QTime
+from PySide6.QtCore import Qt, QTimer, Signal, QEvent, QPoint
+from PySide6.QtGui import QColor
 
 if TYPE_CHECKING:
     from core.task_manager import TaskManager, Task
@@ -85,6 +87,12 @@ class QtMainWindow(FramelessWindow):
         self.pomodoro_seconds = 25 * 60  # 25分钟
         self.pomodoro_remaining = 25 * 60
         self.pomodoro_timer: Optional[QTimer] = None
+        self._todo_syncing = False
+        self._todo_hover_main = False
+        self._todo_hover_popup = False
+        self._todo_hide_timer = QTimer(self)
+        self._todo_hide_timer.setSingleShot(True)
+        self._todo_hide_timer.timeout.connect(self._maybe_hide_todo_popup)
 
         # 设置样式
         self.setStyleSheet(get_dark_theme())
@@ -126,6 +134,9 @@ class QtMainWindow(FramelessWindow):
         # 底部状态行
         bottom_row = self._create_bottom_row()
         layout.addLayout(bottom_row)
+
+        # Hover Todo 面板使用独立浮层窗口，显示在主面板下方
+        self.todo_popup = self._create_todo_popup()
 
     def _ensure_window_size(self):
         """确保窗口尺寸足以完整显示内容（适配高 DPI 缩放）"""
@@ -336,6 +347,98 @@ class QtMainWindow(FramelessWindow):
 
         return layout
 
+    def _create_todo_panel(self) -> QWidget:
+        """创建当前激活任务的 Todo 面板。"""
+        panel = QFrame()
+        panel.setObjectName("todoPanel")
+        panel_layout = QVBoxLayout(panel)
+        panel_layout.setContentsMargins(6, 6, 6, 6)
+        panel_layout.setSpacing(4)
+
+        self.todo_title_label = QLabel("Todo")
+        self.todo_title_label.setStyleSheet("color: #CCCCCC; font-weight: 600;")
+        panel_layout.addWidget(self.todo_title_label)
+
+        self.todo_hint_label = QLabel("请先切换到一个任务")
+        self.todo_hint_label.setStyleSheet("color: #8A8A8A;")
+        panel_layout.addWidget(self.todo_hint_label)
+
+        self.todo_list = QListWidget()
+        self.todo_list.setObjectName("todoList")
+        self.todo_list.setMaximumHeight(120)
+        self.todo_list.itemChanged.connect(self._on_todo_item_changed)
+        panel_layout.addWidget(self.todo_list)
+
+        input_row = QHBoxLayout()
+        input_row.setContentsMargins(0, 0, 0, 0)
+        input_row.setSpacing(4)
+
+        self.todo_clear_completed_button = QPushButton("🧹")
+        self.todo_clear_completed_button.setProperty("data-style", "warning")
+        self.todo_clear_completed_button.setProperty("data-size", "square")
+        self.todo_clear_completed_button.setFixedSize(24, 24)
+        self.todo_clear_completed_button.setToolTip("彻底删除所有已完成子任务")
+        self.todo_clear_completed_button.clicked.connect(self._on_clear_completed_todo_clicked)
+        input_row.addWidget(self.todo_clear_completed_button)
+
+        self.todo_input = QLineEdit()
+        self.todo_input.setPlaceholderText("新增子任务...")
+        self.todo_input.returnPressed.connect(self._on_add_todo_clicked)
+        input_row.addWidget(self.todo_input)
+
+        self.todo_add_button = QPushButton("+")
+        self.todo_add_button.setProperty("data-style", "success")
+        self.todo_add_button.setProperty("data-size", "square")
+        self.todo_add_button.setFixedSize(24, 24)
+        self.todo_add_button.clicked.connect(self._on_add_todo_clicked)
+        input_row.addWidget(self.todo_add_button)
+
+        panel_layout.addLayout(input_row)
+
+        panel.setStyleSheet("""
+            QFrame#todoPanel {
+                background-color: #1E1E1E;
+                border: 1px solid #404040;
+                border-radius: 6px;
+            }
+            QListWidget#todoList {
+                background-color: #151515;
+                border: 1px solid #2E2E2E;
+                border-radius: 4px;
+                color: #F2F2F2;
+            }
+            QListWidget#todoList::item {
+                padding: 4px 2px;
+            }
+        """)
+
+        self._refresh_todo_panel()
+        return panel
+
+    def _create_todo_popup(self) -> QWidget:
+        """创建显示在主面板下方的 Todo 浮层窗口。"""
+        popup = QWidget(
+            None,
+            Qt.Tool | Qt.FramelessWindowHint | Qt.WindowStaysOnTopHint
+        )
+        popup.setObjectName("todoPopupWindow")
+        popup.setAttribute(Qt.WA_ShowWithoutActivating, True)
+
+        popup_layout = QVBoxLayout(popup)
+        popup_layout.setContentsMargins(0, 0, 0, 0)
+        popup_layout.setSpacing(0)
+
+        self.todo_panel = self._create_todo_panel()
+        popup_layout.addWidget(self.todo_panel)
+        popup.hide()
+        popup.installEventFilter(self)
+        self.todo_panel.installEventFilter(self)
+        self.todo_list.installEventFilter(self)
+        self.todo_input.installEventFilter(self)
+        self.todo_add_button.installEventFilter(self)
+        self.todo_clear_completed_button.installEventFilter(self)
+        return popup
+
     # ========== 事件处理 ==========
 
     def _on_refresh_timer(self):
@@ -409,6 +512,180 @@ class QtMainWindow(FramelessWindow):
         """帮助"""
         self.set_status("帮助功能开发中...")
 
+    def _on_add_todo_clicked(self):
+        """新增当前激活任务的 Todo 项。"""
+        if not self.task_manager:
+            return
+
+        current_task = self.task_manager.get_current_task()
+        if not current_task:
+            self.set_status("请先激活一个任务")
+            return
+
+        text = self.todo_input.text().strip()
+        if not text:
+            return
+
+        if self.task_manager.add_todo_item(current_task.id, text):
+            self.todo_input.clear()
+            self._refresh_todo_panel()
+            self.set_status("已添加子任务")
+
+    def _on_todo_item_changed(self, item: QListWidgetItem):
+        """处理 Todo 项勾选状态变化。"""
+        if self._todo_syncing or not self.task_manager:
+            return
+
+        current_task = self.task_manager.get_current_task()
+        if not current_task:
+            return
+
+        item_index = item.data(Qt.UserRole)
+        if item_index is None:
+            item_index = self.todo_list.row(item)
+
+        completed = item.checkState() == Qt.Checked
+        updated = self.task_manager.set_todo_item_completed(current_task.id, int(item_index), completed)
+        if updated:
+            self._apply_todo_item_style(item, completed)
+
+    def _on_clear_completed_todo_clicked(self):
+        """彻底删除当前任务中已完成的 Todo。"""
+        if not self.task_manager:
+            return
+
+        current_task = self.task_manager.get_current_task()
+        if not current_task:
+            self.set_status("请先激活一个任务")
+            return
+
+        removed_count = self.task_manager.remove_completed_todo_items(current_task.id)
+        if removed_count <= 0:
+            self.set_status("没有可删除的已完成子任务")
+            return
+
+        self._refresh_todo_panel()
+        self.set_status(f"已删除 {removed_count} 个已完成子任务")
+
+    def _apply_todo_item_style(self, list_item: QListWidgetItem, completed: bool):
+        """根据完成状态应用 Todo 项视觉样式。"""
+        font = list_item.font()
+        font.setStrikeOut(bool(completed))
+        list_item.setFont(font)
+        list_item.setForeground(QColor("#7F7F7F" if completed else "#F2F2F2"))
+
+    def _refresh_todo_panel(self):
+        """刷新 Todo 面板内容（数据源：当前激活任务）。"""
+        if not hasattr(self, "todo_list"):
+            return
+
+        current_task = self.task_manager.get_current_task() if self.task_manager else None
+
+        self._todo_syncing = True
+        self.todo_list.blockSignals(True)
+        self.todo_list.clear()
+
+        if not current_task:
+            self.todo_title_label.setText("Todo（未激活任务）")
+            self.todo_hint_label.setText("请先切换到一个任务")
+            self.todo_hint_label.setVisible(True)
+            self.todo_list.setEnabled(False)
+            self.todo_input.setEnabled(False)
+            self.todo_add_button.setEnabled(False)
+            self.todo_clear_completed_button.setEnabled(False)
+            self.todo_list.blockSignals(False)
+            self._todo_syncing = False
+            return
+
+        self.todo_title_label.setText(f"Todo · {current_task.name}")
+        todo_items = getattr(current_task, "todo_items", []) or []
+
+        if todo_items:
+            self.todo_hint_label.setVisible(False)
+        else:
+            self.todo_hint_label.setText("暂无子任务，输入后按回车或点击 +")
+            self.todo_hint_label.setVisible(True)
+
+        for index, item_data in enumerate(todo_items):
+            text = str(item_data.get("text", "")).strip()
+            if not text:
+                continue
+            list_item = QListWidgetItem(text)
+            list_item.setFlags(
+                list_item.flags()
+                | Qt.ItemIsEnabled
+                | Qt.ItemIsSelectable
+                | Qt.ItemIsUserCheckable
+            )
+            list_item.setCheckState(Qt.Checked if item_data.get("completed") else Qt.Unchecked)
+            list_item.setData(Qt.UserRole, index)
+            self._apply_todo_item_style(list_item, bool(item_data.get("completed")))
+            self.todo_list.addItem(list_item)
+
+        self.todo_list.setEnabled(True)
+        self.todo_input.setEnabled(True)
+        self.todo_add_button.setEnabled(True)
+        self.todo_clear_completed_button.setEnabled(True)
+
+        self.todo_list.blockSignals(False)
+        self._todo_syncing = False
+
+    def _set_todo_panel_visible(self, visible: bool):
+        """控制 Todo 浮层显示状态。"""
+        if visible:
+            self._show_todo_popup()
+        else:
+            self._hide_todo_popup()
+
+    def _position_todo_popup(self):
+        """将 Todo 浮层定位到主窗口正下方。"""
+        if not hasattr(self, "todo_popup"):
+            return
+
+        anchor_widget = self.content_widget if hasattr(self, "content_widget") else self
+        anchor_top_left = anchor_widget.mapToGlobal(QPoint(0, 0))
+        anchor_bottom = anchor_widget.mapToGlobal(QPoint(0, anchor_widget.height()))
+
+        popup_width = anchor_widget.width()
+        self.todo_popup.setFixedWidth(popup_width)
+        self.todo_popup.adjustSize()
+
+        popup_x = anchor_top_left.x()
+        popup_y = anchor_bottom.y() + 2
+        self.todo_popup.move(popup_x, popup_y)
+
+    def _show_todo_popup(self):
+        """显示 Todo 浮层。"""
+        if not hasattr(self, "todo_popup"):
+            return
+        self._refresh_todo_panel()
+        self._position_todo_popup()
+        self.todo_popup.show()
+        self.todo_popup.raise_()
+
+    def _hide_todo_popup(self):
+        """隐藏 Todo 浮层。"""
+        if hasattr(self, "todo_popup"):
+            self.todo_popup.hide()
+        self._todo_hover_popup = False
+
+    def _schedule_hide_todo_popup(self):
+        """延迟隐藏，允许鼠标从主面板移动到浮层。"""
+        if self._todo_hide_timer.isActive():
+            self._todo_hide_timer.stop()
+        self._todo_hide_timer.start(120)
+
+    def _cancel_hide_todo_popup(self):
+        """取消延迟隐藏。"""
+        if self._todo_hide_timer.isActive():
+            self._todo_hide_timer.stop()
+
+    def _maybe_hide_todo_popup(self):
+        """仅当鼠标不在主面板与浮层上时才隐藏。"""
+        if self._todo_hover_main or self._todo_hover_popup:
+            return
+        self._hide_todo_popup()
+
     # ========== 任务列表管理 ==========
 
     def _refresh_tasks(self):
@@ -437,6 +714,7 @@ class QtMainWindow(FramelessWindow):
 
         # 更新表格
         self.task_table.load_tasks(self.filtered_tasks)
+        self._refresh_todo_panel()
 
     def _apply_filters(self):
         """应用筛选条件"""
@@ -648,3 +926,57 @@ class QtMainWindow(FramelessWindow):
         """清理资源"""
         if self.pomodoro_timer:
             self.pomodoro_timer.stop()
+        if hasattr(self, "todo_popup"):
+            self.todo_popup.hide()
+            self.todo_popup.close()
+
+    def eventFilter(self, watched, event):
+        """处理 Todo 浮层的悬停状态。"""
+        if hasattr(self, "todo_popup") and watched in {
+            self.todo_popup,
+            self.todo_panel,
+            self.todo_list,
+            self.todo_input,
+            self.todo_add_button,
+            self.todo_clear_completed_button,
+        }:
+            if event.type() == QEvent.Enter:
+                self._todo_hover_popup = True
+                self._cancel_hide_todo_popup()
+                self._show_todo_popup()
+                return False
+            if event.type() == QEvent.Leave:
+                self._todo_hover_popup = False
+                self._schedule_hide_todo_popup()
+                return False
+        return super().eventFilter(watched, event)
+
+    def enterEvent(self, event):
+        """鼠标进入窗口时显示 Todo 面板。"""
+        super().enterEvent(event)
+        self._todo_hover_main = True
+        self._cancel_hide_todo_popup()
+        self._show_todo_popup()
+
+    def leaveEvent(self, event):
+        """鼠标离开窗口时隐藏 Todo 面板。"""
+        self._todo_hover_main = False
+        self._schedule_hide_todo_popup()
+        super().leaveEvent(event)
+
+    def moveEvent(self, event):
+        """窗口移动时同步浮层位置。"""
+        super().moveEvent(event)
+        if hasattr(self, "todo_popup") and self.todo_popup.isVisible():
+            self._position_todo_popup()
+
+    def resizeEvent(self, event):
+        """窗口尺寸变化时同步浮层位置与宽度。"""
+        super().resizeEvent(event)
+        if hasattr(self, "todo_popup") and self.todo_popup.isVisible():
+            self._position_todo_popup()
+
+    def hideEvent(self, event):
+        """主窗口隐藏时同步隐藏浮层。"""
+        self._hide_todo_popup()
+        super().hideEvent(event)

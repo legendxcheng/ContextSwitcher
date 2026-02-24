@@ -192,6 +192,8 @@ class FramelessWindow(QMainWindow):
 
         if self._keep_on_top:
             flags |= Qt.WindowStaysOnTopHint
+        # 仅托盘显示：隐藏任务栏图标
+        flags |= Qt.Tool
 
         # 如果可调整大小
         if self._resizable:

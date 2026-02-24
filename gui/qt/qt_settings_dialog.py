@@ -5,12 +5,14 @@ PySide6 设置对话框
 """
 
 from typing import List
+import os
 
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QCheckBox, QComboBox, QSpinBox, QDoubleSpinBox,
-    QGroupBox, QFormLayout, QDialogButtonBox, QMessageBox
+    QGroupBox, QFormLayout, QDialogButtonBox, QMessageBox,
+    QLineEdit, QPushButton, QFileDialog
 )
 
 from core.task_manager import TaskManager
@@ -110,6 +112,19 @@ class QtSettingsDialog(QDialog):
 
         layout.addWidget(switcher_group)
 
+        # Wave 集成设置
+        wave_group = QGroupBox("Wave 集成")
+        wave_layout = QFormLayout(wave_group)
+        wave_path_row = QHBoxLayout()
+        self.wave_exe_input = QLineEdit()
+        self.wave_exe_input.setPlaceholderText("Wave.exe 完整路径")
+        browse_btn = QPushButton("浏览")
+        browse_btn.clicked.connect(self._browse_wave_exe)
+        wave_path_row.addWidget(self.wave_exe_input, 1)
+        wave_path_row.addWidget(browse_btn)
+        wave_layout.addRow("Wave.exe 路径:", wave_path_row)
+        layout.addWidget(wave_group)
+
         # 窗口行为设置
         window_group = QGroupBox("窗口行为")
         window_layout = QFormLayout(window_group)
@@ -162,6 +177,7 @@ class QtSettingsDialog(QDialog):
         switcher_config = self.config.get_task_switcher_config()
         window_config = self.config.get_window_config()
         productivity = self.config.get_productivity_config()
+        wave_config = self.config.get("integrations.wave", {})
 
         self.idle_time_spin.setValue(monitoring.get("idle_time_warning_minutes", 10))
         self.switcher_enabled.setChecked(hotkeys.get("switcher_enabled", True))
@@ -179,6 +195,7 @@ class QtSettingsDialog(QDialog):
         self.remember_position.setChecked(window_config.get("remember_position", True))
 
         self.daily_goal_spin.setValue(productivity.get("daily_goal_minutes", 120))
+        self.wave_exe_input.setText(wave_config.get("exe_path", ""))
 
         self._update_switcher_enabled_state()
 
@@ -201,6 +218,7 @@ class QtSettingsDialog(QDialog):
         self.remember_position.setChecked(defaults["window"]["remember_position"])
 
         self.daily_goal_spin.setValue(defaults["productivity"]["daily_goal_minutes"])
+        self.wave_exe_input.setText(defaults["integrations"]["wave"]["exe_path"])
 
         self._update_hotkey_preview()
         self._update_conflict_status()
@@ -317,6 +335,14 @@ class QtSettingsDialog(QDialog):
         productivity = self.config.get_productivity_config()
         productivity["daily_goal_minutes"] = self.daily_goal_spin.value()
 
+        wave_path = self.wave_exe_input.text().strip()
+        if wave_path and not os.path.isfile(wave_path):
+            QMessageBox.warning(self, "设置错误", "Wave.exe 路径无效，请检查后再保存")
+            return
+
+        wave_config = self.config.get("integrations.wave", {})
+        wave_config["exe_path"] = wave_path
+
         if not self.config.save():
             QMessageBox.warning(self, "保存失败", "无法保存配置文件")
             return
@@ -346,6 +372,16 @@ class QtSettingsDialog(QDialog):
 
         except Exception as exc:
             print(f"⚠️ 重载系统组件时出错: {exc}")
+
+    def _browse_wave_exe(self):
+        path, _ = QFileDialog.getOpenFileName(
+            self,
+            "选择 Wave.exe",
+            "",
+            "Wave.exe (Wave.exe);;可执行文件 (*.exe);;所有文件 (*.*)"
+        )
+        if path:
+            self.wave_exe_input.setText(path)
 
 
 __all__ = ["QtSettingsDialog"]

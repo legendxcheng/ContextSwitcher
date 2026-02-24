@@ -49,7 +49,7 @@ class ModernUIConfig:
         icon_path = cls._get_icon_path()
         
         config = {
-            'title': 'ContextSwitcher',  # 设置标题以确保任务栏图标显示
+            'title': 'ContextSwitcher',  # 标题用于窗口识别（任务栏图标由运行时控制）
             'no_titlebar': True,
             'keep_on_top': True,
             'grab_anywhere': True,   # 重新启用全局拖拽

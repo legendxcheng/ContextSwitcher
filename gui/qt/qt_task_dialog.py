@@ -76,6 +76,10 @@ class QtTaskDialog(QDialog):
         self.name_input.setPlaceholderText("请输入任务名称")
         info_layout.addRow("任务名称:", self.name_input)
 
+        self.wave_workspace_input = QLineEdit()
+        self.wave_workspace_input.setPlaceholderText("可选：Wave workspace 名称")
+        info_layout.addRow("Wave工作区:", self.wave_workspace_input)
+
         status_row = QHBoxLayout()
         self.status_combo = QComboBox()
         for label, value in self.STATUS_OPTIONS:
@@ -201,6 +205,7 @@ class QtTaskDialog(QDialog):
 
     def _reset_fields(self):
         self.name_input.setText("")
+        self.wave_workspace_input.setText("")
         self.status_combo.setCurrentIndex(0)
         self.priority_combo.setCurrentIndex(0)
         self.window_search.setText("")
@@ -208,6 +213,7 @@ class QtTaskDialog(QDialog):
 
     def _load_task(self, task: Task):
         self.name_input.setText(task.name)
+        self.wave_workspace_input.setText(getattr(task, "wave_workspace", "") or "")
 
         # 状态
         status_index = 0
@@ -277,6 +283,7 @@ class QtTaskDialog(QDialog):
             description = ""
         status = self.status_combo.currentData()
         priority = self.priority_combo.currentData()
+        wave_workspace = self.wave_workspace_input.text().strip()
         window_hwnds = [w.hwnd for w in self._selected_windows]
 
         if not name:
@@ -298,7 +305,8 @@ class QtTaskDialog(QDialog):
                 description=description,
                 status=status,
                 window_hwnds=window_hwnds,
-                priority=priority
+                priority=priority,
+                wave_workspace=wave_workspace
             )
             if not success:
                 QMessageBox.warning(self, "错误", "任务更新失败")
@@ -315,7 +323,8 @@ class QtTaskDialog(QDialog):
             self.task_manager.edit_task(
                 task.id,
                 status=status,
-                priority=priority
+                priority=priority,
+                wave_workspace=wave_workspace
             )
 
         self.accept()

@@ -14,7 +14,8 @@
       "Bash(cd:*)",
       "Bash(dir:*)",
       "WebFetch(domain:stackoverflow.com)",
-      "WebFetch(domain:docs.waveterm.dev)"
+      "WebFetch(domain:docs.waveterm.dev)",
+      "Bash(./build.bat:*)"
     ],
     "deny": [],
     "ask": []

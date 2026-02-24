@@ -121,6 +121,7 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         """显示窗口"""
         if not self.window:
             self.window = self.create_window()
+            self._apply_tray_only_window_style()
         
         self.running = True
         self.action_dispatcher.update_display()
@@ -142,6 +143,41 @@ class MainWindow(IWindowActions, IWindowProvider, INotificationProvider, ILayout
         self.action_dispatcher.setup_task_manager_callbacks()
         
         print("✓ 主窗口已显示")
+
+    def _apply_tray_only_window_style(self):
+        """隐藏任务栏图标，仅保留系统托盘入口（Windows）"""
+        if not self.window:
+            return
+        try:
+            import os
+            if os.name != "nt":
+                return
+            root = getattr(self.window, "TKroot", None)
+            if not root:
+                return
+            try:
+                import win32con
+                import win32gui
+                hwnd = root.winfo_id()
+                ex_style = win32gui.GetWindowLong(hwnd, win32con.GWL_EXSTYLE)
+                ex_style = (ex_style | win32con.WS_EX_TOOLWINDOW) & ~win32con.WS_EX_APPWINDOW
+                win32gui.SetWindowLong(hwnd, win32con.GWL_EXSTYLE, ex_style)
+                win32gui.SetWindowPos(
+                    hwnd,
+                    None,
+                    0, 0, 0, 0,
+                    win32con.SWP_NOMOVE
+                    | win32con.SWP_NOSIZE
+                    | win32con.SWP_NOZORDER
+                    | win32con.SWP_FRAMECHANGED
+                )
+            except Exception:
+                try:
+                    root.wm_attributes("-toolwindow", True)
+                except Exception:
+                    pass
+        except Exception:
+            pass
     
     def hide(self):
         """隐藏窗口"""

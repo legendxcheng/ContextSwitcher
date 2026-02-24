@@ -181,12 +181,27 @@ class TableDataProvider(IDataProvider):
             # 优先级图标
             priority = getattr(task, 'priority', 0)
             priority_icons = {0: "", 1: "����", 2: "➖", 3: "🔺"}  # 普通、低、中、高
-            priority_icon = priority_icons.get(priority, "")
+            priority_icon = self._get_priority_icon(task, priority_icons, priority)
 
             # 新的6列格式：编号、优先级、任务名、窗口数、状态、今日时间
             table_data.append([task_num, priority_icon, task_name, windows_info, status, time_display])
 
         return table_data
+
+    def _get_priority_icon(self, task, priority_icons: Dict[int, str], priority: int) -> str:
+        """获取P列图标（Wave绑定优先显示）"""
+        if self._has_wave_workspace(task):
+            return "🌊"
+        return priority_icons.get(priority, "")
+
+    def _has_wave_workspace(self, task) -> bool:
+        """判断任务是否绑定了 Wave workspace"""
+        workspace = getattr(task, 'wave_workspace', None)
+        if workspace is None:
+            return False
+        if isinstance(workspace, str):
+            return workspace.strip() != ""
+        return bool(workspace)
 
     def _get_enhanced_status_display(self, task, orig_idx, current_index, valid_windows, total_windows) -> str:
         """获取增强的状态显示

@@ -141,6 +141,7 @@ class TaskDialog:
         return self.layout_builder.build_full_layout(
             task_name=form_values["task_name"],
             task_description=form_values["task_description"],
+            task_wave_workspace=form_values["task_wave_workspace"],
             task_status=self.form_handler.get_form_data().status,
             task_priority=self.form_handler.get_form_data().priority,
             task_notes=form_values["task_notes"],

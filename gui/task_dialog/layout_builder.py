@@ -29,6 +29,7 @@ class TaskDialogLayoutBuilder:
         self,
         task_name: str = "",
         task_description: str = "",
+        task_wave_workspace: str = "",
         task_status: TaskStatus = TaskStatus.TODO,
         task_priority: int = 0,
         task_notes: str = "",
@@ -56,7 +57,7 @@ class TaskDialogLayoutBuilder:
 
         # 任务信息区域
         info_frame = self._build_task_info_frame(
-            task_name, task_description, task_status,
+            task_name, task_description, task_wave_workspace, task_status,
             task_priority, task_notes, task_tags
         )
 
@@ -88,6 +89,7 @@ class TaskDialogLayoutBuilder:
         self,
         task_name: str,
         task_description: str,
+        task_wave_workspace: str,
         task_status: TaskStatus,
         task_priority: int,
         task_notes: str,
@@ -119,6 +121,9 @@ class TaskDialogLayoutBuilder:
             [sg.Text("任务描述:", size=(10, 1)),
              sg.Multiline(task_description, key="-TASK_DESC-",
                          size=(40, 2), enable_events=True)],
+            [sg.Text("Wave工作区:", size=(10, 1)),
+             sg.Input(task_wave_workspace, key="-TASK_WAVE_WORKSPACE-", size=(40, 1),
+                     tooltip="可选：填写 Wave workspace 名称，切换任务时自动切换")],
             [sg.Text("任务状态:", size=(10, 1)),
              sg.Combo(self.status_converter.get_all_status_options(),
                      default_value=self.status_converter.status_to_text(task_status),

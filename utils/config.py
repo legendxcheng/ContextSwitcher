@@ -56,6 +56,11 @@ class Config:
                 "system_tray": False,
                 "startup_with_windows": False
             },
+            "integrations": {
+                "wave": {
+                    "exe_path": ""  # Wave.exe 路径（用于切换 workspace）
+                }
+            },
             "monitoring": {
                 "idle_time_warning_minutes": 10,  # 待机时间警告阈值（分钟）
                 "toast_notifications_enabled": True,  # 启用Toast通知
