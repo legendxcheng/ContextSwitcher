@@ -1,0 +1,3 @@
+# Use keyed JSON resources behind one localization interface
+
+ContextSwitcher will localize app-owned text through the `tr(key, **params)` interface and discover bundled JSON locale resources at runtime, with `zh-CN` as the complete fallback catalog. We chose stable keys over Qt source-text catalogs because the app builds much of its UI dynamically and needs immediate language changes; this also keeps locale resolution, fallback, formatting, and resource validation out of GUI callers. Adding a language requires a resource file and release packaging, not business-code changes; downloadable third-party language packs remain out of scope.
