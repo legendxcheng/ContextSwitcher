@@ -1,4 +1,4 @@
-# ContextSwitcher
+# ContextSwitcher — Windows 任务与工作区切换器
 
 简体中文 | [English](README.md)
 
@@ -7,9 +7,11 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 [![许可证：MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**切换任务，不必重新拼装桌面上下文。**
+**面向开发者的 Windows 任务切换器、桌面工作区管理器和窗口布局恢复工具。**
 
-ContextSwitcher 是一款本地优先的 Windows 桌面工具，适合需要同时推进多个任务的人。你可以把属于同一任务的多个窗口组织在一起，然后通过快捷键恢复整个工作上下文，不必再次寻找和排列每个窗口。
+ContextSwitcher 是一款开源、本地优先的 Windows 效率工具，适合需要同时推进多个任务的人。你可以按任务组织应用窗口，保存桌面上下文，然后通过全局快捷键恢复对应的工作区，不必再次寻找和排列每个窗口。
+
+它特别适合由 VS Code、终端、浏览器、文件资源管理器、文档和 AI 编程 Agent 共同组成的开发工作流。
 
 界面支持英语和简体中文，也可以跟随 Windows 显示语言。
 
@@ -18,6 +20,16 @@ ContextSwitcher 是一款本地优先的 Windows 桌面工具，适合需要同�
 ## 为什么使用 ContextSwitcher？
 
 一个任务通常不只是一个应用，而是由编辑器、终端、文档、文件资源管理器，甚至 AI Agent 共同组成。ContextSwitcher 把这些窗口视为一个可以恢复的任务上下文。
+
+常见使用场景包括：
+
+- 在多个编程项目间切换的 **Windows 任务切换器**。
+- 将相关应用窗口分组的 **桌面工作区管理器**。
+- 快速继续工作的 **窗口布局保存与恢复工具**。
+- 面向重度多任务场景、对 `Alt+Tab` 的任务化补充。
+- 管理并行 Agent 与终端工作流的 **AI 编程上下文管理器**。
+
+核心能力：
 
 - 将多个桌面窗口绑定到同一个任务。
 - 使用 `Ctrl+Alt+Space` 打开任务切换器。

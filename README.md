@@ -1,4 +1,4 @@
-# ContextSwitcher
+# ContextSwitcher — Windows Task & Workspace Switcher
 
 [简体中文](README.zh-CN.md) | English
 
@@ -7,9 +7,11 @@
 ![Python](https://img.shields.io/badge/python-3.10%2B-3776AB)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green.svg)](LICENSE)
 
-**Switch tasks without rebuilding your desktop context.**
+**A Windows task switcher, desktop workspace manager, and window layout restorer for developers.**
 
-ContextSwitcher is a local-first Windows desktop app for people who work across several tasks at once. Group the windows that belong to a task, then bring that working context back with a shortcut instead of finding and arranging every window again.
+ContextSwitcher is an open-source, local-first Windows productivity app for people who work across several tasks at once. Group application windows by task, save their desktop context, and restore the right workspace with a global hotkey instead of finding and arranging every window again.
+
+It is designed for developer workflows that span VS Code, terminals, browsers, File Explorer, documentation, and AI coding agents.
 
 The interface is available in English and Simplified Chinese and can follow the Windows display language.
 
@@ -18,6 +20,16 @@ The interface is available in English and Simplified Chinese and can follow the 
 ## Why ContextSwitcher?
 
 A task is usually more than one application: an editor, a terminal, documentation, File Explorer, and perhaps an AI agent. ContextSwitcher treats those windows as one resumable context.
+
+Common use cases include:
+
+- A **Windows task switcher** for moving between coding projects.
+- A **desktop workspace manager** that groups related application windows.
+- A **window layout saver and restorer** for resuming work quickly.
+- A task-oriented complement to `Alt+Tab` for heavy multitasking.
+- An **AI coding context manager** for parallel agent and terminal workflows.
+
+Core capabilities:
 
 - Bind multiple desktop windows to one task.
 - Open the task switcher with `Ctrl+Alt+Space`.
