@@ -1,14 +1,14 @@
-use crate::models::{CsTask, DispatchRecord, Project, Task, TaskStatus};
+use crate::models::{CsTask, Project, Task, TaskStatus};
 use chrono::Utc;
-use rusqlite::{params, Connection};
 use rfd;
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use tauri::State;
 use uuid::Uuid;
 use walkdir::WalkDir;
 
-pub struct DbState(pub Mutex<Connection>);
+pub struct DbState(pub Arc<Mutex<Connection>>);
 
 // ── Projects ──────────────────────────────────────────────────────────────────
 
@@ -30,7 +30,8 @@ pub fn list_projects(state: State<DbState>) -> Result<Vec<Project>, String> {
             })
         })
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    rows.collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())
 }
 
 #[tauri::command]
@@ -77,10 +78,29 @@ pub fn update_project(
 }
 
 #[tauri::command]
-pub fn delete_project(state: State<DbState>, id: String) -> Result<(), String> {
+pub fn delete_project(
+    state: State<DbState>,
+    terminals: State<Arc<crate::terminal::TerminalManager>>,
+    id: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let pending: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM dispatch_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if pending {
+        return Err("dispatch.verify_required".into());
+    }
+    let ids = conn
+        .prepare("SELECT id FROM tasks WHERE project_id=?1")
+        .map_err(|e| e.to_string())?
+        .query_map([&id], |r| r.get::<_, String>(0))
+        .map_err(|e| e.to_string())?
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
     conn.execute("DELETE FROM projects WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+    for task in ids {
+        terminals.close_task(&task);
+    }
     Ok(())
 }
 
@@ -99,6 +119,7 @@ fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
         dispatched_to: row.get(7)?,
         created_at: row.get(8)?,
         updated_at: row.get(9)?,
+        binding: None,
     })
 }
 
@@ -115,7 +136,13 @@ pub fn list_tasks(state: State<DbState>, project_id: String) -> Result<Vec<Task>
     let rows = stmt
         .query_map(params![project_id], row_to_task)
         .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>().map_err(|e| e.to_string())
+    let mut tasks = rows
+        .collect::<Result<Vec<_>, _>>()
+        .map_err(|e| e.to_string())?;
+    for task in &mut tasks {
+        task.binding = Some(crate::workflow::binding(&conn, &task.id)?);
+    }
+    Ok(tasks)
 }
 
 #[tauri::command]
@@ -137,14 +164,19 @@ pub fn create_task(
         dispatched_to: None,
         created_at: now.clone(),
         updated_at: now.clone(),
+        binding: None,
     };
     conn.execute(
         "INSERT INTO tasks (id,project_id,name,status,prompt_json,created_at,updated_at)
          VALUES (?1,?2,?3,?4,?5,?6,?7)",
         params![
-            task.id, task.project_id, task.name,
-            task.status.as_str(), task.prompt_json,
-            task.created_at, task.updated_at
+            task.id,
+            task.project_id,
+            task.name,
+            task.status.as_str(),
+            task.prompt_json,
+            task.created_at,
+            task.updated_at
         ],
     )
     .map_err(|e| e.to_string())?;
@@ -171,24 +203,42 @@ pub fn update_task(
 #[tauri::command]
 pub fn update_task_status(
     state: State<DbState>,
+    terminals: State<Arc<crate::terminal::TerminalManager>>,
     id: String,
     status: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    if !matches!(status.as_str(), "todo" | "done") {
+        return Err("dispatch.required".into());
+    }
+    if crate::workflow::binding(&conn, &id)?.operation.is_some() {
+        return Err("dispatch.verify_required".into());
+    }
     let now = Utc::now().to_rfc3339();
     conn.execute(
         "UPDATE tasks SET status=?1, updated_at=?2 WHERE id=?3",
         params![status, now, id],
     )
     .map_err(|e| e.to_string())?;
+    drop(conn);
+    terminals.close_task(&id);
     Ok(())
 }
 
 #[tauri::command]
-pub fn delete_task(state: State<DbState>, id: String) -> Result<(), String> {
+pub fn delete_task(
+    state: State<DbState>,
+    terminals: State<Arc<crate::terminal::TerminalManager>>,
+    id: String,
+) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    if crate::workflow::binding(&conn, &id)?.operation.is_some() {
+        return Err("dispatch.verify_required".into());
+    }
     conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
         .map_err(|e| e.to_string())?;
+    drop(conn);
+    terminals.close_task(&id);
     Ok(())
 }
 
@@ -215,7 +265,8 @@ pub fn search_files(root_path: String, query: String) -> Result<Vec<FileEntry>, 
         .filter(|e| {
             // skip common noise dirs
             !e.path().components().any(|c| {
-                matches!(c.as_os_str().to_string_lossy().as_ref(),
+                matches!(
+                    c.as_os_str().to_string_lossy().as_ref(),
                     "node_modules" | ".git" | "target" | "__pycache__" | ".venv" | "dist" | "build"
                 )
             })
@@ -233,7 +284,10 @@ pub fn search_files(root_path: String, query: String) -> Result<Vec<FileEntry>, 
                 .unwrap_or(e.path())
                 .to_string_lossy()
                 .replace('\\', "/");
-            FileEntry { rel_path: rel, abs_path: abs }
+            FileEntry {
+                rel_path: rel,
+                abs_path: abs,
+            }
         })
         .collect();
     results.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
@@ -267,11 +321,18 @@ pub fn search_skills(query: String) -> Result<Vec<SkillEntry>, String> {
     {
         let path = entry.path();
         let content = std::fs::read_to_string(path).unwrap_or_default();
-        let name = extract_frontmatter_field(&content, "name")
-            .unwrap_or_else(|| path.parent().and_then(|p| p.file_name()).map(|n| n.to_string_lossy().into_owned()).unwrap_or_default());
+        let name = extract_frontmatter_field(&content, "name").unwrap_or_else(|| {
+            path.parent()
+                .and_then(|p| p.file_name())
+                .map(|n| n.to_string_lossy().into_owned())
+                .unwrap_or_default()
+        });
         let description = extract_frontmatter_field(&content, "description").unwrap_or_default();
 
-        if q.is_empty() || name.to_lowercase().contains(&q) || description.to_lowercase().contains(&q) {
+        if q.is_empty()
+            || name.to_lowercase().contains(&q)
+            || description.to_lowercase().contains(&q)
+        {
             results.push(SkillEntry {
                 name,
                 description,
@@ -287,12 +348,19 @@ pub fn search_skills(query: String) -> Result<Vec<SkillEntry>, String> {
 
 fn extract_frontmatter_field(content: &str, field: &str) -> Option<String> {
     let prefix = format!("{field}:");
-    content.lines()
+    content
+        .lines()
         .skip_while(|l| *l != "---")
         .skip(1)
         .take_while(|l| *l != "---")
         .find(|l| l.trim_start().starts_with(&prefix))
-        .map(|l| l.trim_start().trim_start_matches(&prefix).trim().trim_matches('"').to_string())
+        .map(|l| {
+            l.trim_start()
+                .trim_start_matches(&prefix)
+                .trim()
+                .trim_matches('"')
+                .to_string()
+        })
 }
 
 // ── Read file contents (for @ expansion preview) ──────────────────────────────
@@ -309,140 +377,6 @@ pub fn read_skill_content(skill_md_path: String) -> Result<String, String> {
 
 // ── Herdr integration ─────────────────────────────────────────────────────────
 
-#[derive(serde::Serialize)]
-pub struct HerdrAgent {
-    pub name: String,
-    pub status: String,
-    pub pane_id: String,
-    pub title: String,
-}
-
-/// Run `herdr agent list` and parse the JSON output into agent entries.
-/// Filters to agents whose workspace label matches `workspace` (case-insensitive).
-#[tauri::command]
-pub fn herdr_list_agents(workspace: String) -> Result<Vec<HerdrAgent>, String> {
-    let output = std::process::Command::new("herdr")
-        .args(["agent", "list"])
-        .output()
-        .map_err(|e| format!("herdr not found: {e}"))?;
-
-    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() && stdout.trim().is_empty() {
-        return Err(format!("herdr agent list failed: {stderr}"));
-    }
-
-    // herdr agent list outputs a single JSON line:
-    // {"id":"cli:agent:list","result":{"agents":[{...}],...}}
-    // Each agent has: agent, agent_status, pane_id, terminal_title_stripped, workspace_id
-    // We also need the workspace label from herdr workspace list to filter by name.
-    // Simpler: filter by cwd basename matching workspace label, or return all and let UI filter.
-    // We match workspace label against the terminal_title_stripped suffix " | <label>" pattern,
-    // or against cwd basename. We fetch workspace list to map workspace_id → label.
-    let doc: serde_json::Value = serde_json::from_str(&stdout)
-        .map_err(|e| format!("parse herdr agent list: {e}"))?;
-    let agents_arr = doc
-        .get("result")
-        .and_then(|r| r.get("agents"))
-        .and_then(|a| a.as_array())
-        .ok_or_else(|| "herdr agent list: missing result.agents".to_string())?;
-
-    // Fetch workspace list to map workspace_id → label
-    let ws_map = fetch_workspace_label_map();
-
-    let ws_lower = workspace.to_lowercase();
-    let result: Vec<HerdrAgent> = agents_arr.iter().filter_map(|a| {
-        let pane_id = a.get("pane_id")?.as_str()?.to_string();
-        let agent_type = a.get("agent").and_then(|v| v.as_str()).unwrap_or("?").to_string();
-        let status = a.get("agent_status").and_then(|v| v.as_str()).unwrap_or("unknown").to_string();
-        let title = a.get("terminal_title_stripped").and_then(|v| v.as_str()).unwrap_or("").to_string();
-        let workspace_id = a.get("workspace_id").and_then(|v| v.as_str()).unwrap_or("").to_string();
-
-        // Filter by workspace label if provided
-        if !ws_lower.is_empty() {
-            let label = ws_map.get(&workspace_id).map(|s| s.to_lowercase()).unwrap_or_default();
-            let cwd = a.get("cwd").and_then(|v| v.as_str()).unwrap_or("");
-            let cwd_basename = cwd.replace('\\', "/").split('/').last().unwrap_or("").to_lowercase();
-            if !label.contains(&ws_lower) && !cwd_basename.contains(&ws_lower) {
-                return None;
-            }
-        }
-
-        Some(HerdrAgent {
-            name: agent_type,
-            status,
-            pane_id,
-            title,
-        })
-    }).collect();
-
-    Ok(result)
-}
-
-fn fetch_workspace_label_map() -> std::collections::HashMap<String, String> {
-    let output = std::process::Command::new("herdr")
-        .args(["workspace", "list"])
-        .output();
-    let Ok(out) = output else { return Default::default() };
-    let stdout = String::from_utf8_lossy(&out.stdout).to_string();
-    let Ok(doc) = serde_json::from_str::<serde_json::Value>(&stdout) else { return Default::default() };
-    let Some(arr) = doc.get("result").and_then(|r| r.get("workspaces")).and_then(|a| a.as_array()) else {
-        return Default::default();
-    };
-    arr.iter().filter_map(|w| {
-        let id = w.get("workspace_id")?.as_str()?.to_string();
-        let label = w.get("label")?.as_str()?.to_string();
-        Some((id, label))
-    }).collect()
-}
-
-/// Dispatch a resolved prompt to a Herdr agent via `herdr agent prompt`.
-/// `agent_name` is the pane_id (e.g. "w3:p2") returned by herdr_list_agents.
-#[tauri::command]
-pub fn dispatch_to_herdr(
-    state: State<DbState>,
-    task_id: String,
-    agent_name: String,   // actually the pane_id used as TARGET
-    workspace: String,
-    prompt_text: String,
-) -> Result<DispatchRecord, String> {
-    // Guard: do not allow empty prompt
-    if prompt_text.trim().is_empty() {
-        return Err("Prompt is empty".into());
-    }
-
-    let output = std::process::Command::new("herdr")
-        .args(["agent", "prompt", &agent_name, &prompt_text])
-        .output()
-        .map_err(|e| format!("herdr not found: {e}"))?;
-
-    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-    if !output.status.success() {
-        return Err(format!("herdr agent prompt failed: {stderr}"));
-    }
-
-    let now = Utc::now().to_rfc3339();
-    let target = format!("{workspace}/{agent_name}");
-
-    // Update task: status → in_progress, store snapshot and dispatch info
-    {
-        let conn = state.0.lock().map_err(|e| e.to_string())?;
-        conn.execute(
-            "UPDATE tasks SET status='in_progress', prompt_snapshot=?1, dispatched_at=?2, dispatched_to=?3, updated_at=?4 WHERE id=?5",
-            params![prompt_text, now, target, now, task_id],
-        )
-        .map_err(|e| e.to_string())?;
-    }
-
-    Ok(DispatchRecord {
-        task_id,
-        target_workspace: workspace,
-        target_agent: agent_name,
-        prompt_snapshot: prompt_text,
-        dispatched_at: now,
-    })
-}
-
 // ── ContextSwitcher integration ───────────────────────────────────────────────
 
 /// Open a native folder picker. Returns the chosen absolute path, or null if cancelled.
@@ -458,8 +392,7 @@ pub fn pick_folder() -> Result<Option<String>, String> {
 /// and return a slim list for the project-link picker.
 #[tauri::command]
 pub fn read_cs_tasks() -> Result<Vec<CsTask>, String> {
-    let appdata = std::env::var("APPDATA")
-        .map_err(|_| "APPDATA not set".to_string())?;
+    let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA not set".to_string())?;
     let path = PathBuf::from(appdata)
         .join("ContextSwitcher")
         .join("tasks.json");
@@ -468,30 +401,40 @@ pub fn read_cs_tasks() -> Result<Vec<CsTask>, String> {
         return Ok(vec![]);
     }
 
-    let raw = std::fs::read_to_string(&path)
-        .map_err(|e| format!("read tasks.json: {e}"))?;
-    let doc: serde_json::Value = serde_json::from_str(&raw)
-        .map_err(|e| format!("parse tasks.json: {e}"))?;
+    let raw = std::fs::read_to_string(&path).map_err(|e| format!("read tasks.json: {e}"))?;
+    let doc: serde_json::Value =
+        serde_json::from_str(&raw).map_err(|e| format!("parse tasks.json: {e}"))?;
 
-    let tasks = doc.get("tasks")
+    let tasks = doc
+        .get("tasks")
         .and_then(|v| v.as_array())
         .ok_or_else(|| "tasks.json missing 'tasks' array".to_string())?;
 
-    let result: Vec<CsTask> = tasks.iter().filter_map(|t| {
-        let id = t.get("id")?.as_str()?.to_string();
-        let name = t.get("name")?.as_str()?.to_string();
-        let status = t.get("status")
-            .and_then(|v| v.as_str())
-            .unwrap_or("todo")
-            .to_string();
-        // herdr workspace is nested under herdr_binding.label in v1.4+ format
-        let herdr_workspace = t.get("herdr_binding")
-            .and_then(|b| b.get("label"))
-            .and_then(|v| v.as_str())
-            .filter(|s| !s.is_empty())
-            .map(|s| s.to_string());
-        Some(CsTask { id, name, status, herdr_workspace })
-    }).collect();
+    let result: Vec<CsTask> = tasks
+        .iter()
+        .filter_map(|t| {
+            let id = t.get("id")?.as_str()?.to_string();
+            let name = t.get("name")?.as_str()?.to_string();
+            let status = t
+                .get("status")
+                .and_then(|v| v.as_str())
+                .unwrap_or("todo")
+                .to_string();
+            // herdr workspace is nested under herdr_binding.label in v1.4+ format
+            let herdr_workspace = t
+                .get("herdr_binding")
+                .and_then(|b| b.get("label"))
+                .and_then(|v| v.as_str())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string());
+            Some(CsTask {
+                id,
+                name,
+                status,
+                herdr_workspace,
+            })
+        })
+        .collect();
 
     Ok(result)
 }

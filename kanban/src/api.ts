@@ -1,4 +1,4 @@
-import { invoke } from "@tauri-apps/api/core";
+import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
   Project, Task, FileEntry, SkillEntry, HerdrAgent, DispatchRecord, CsTask,
 } from "./types";
@@ -36,10 +36,23 @@ export const readSkillContent = (skillMdPath: string) =>
 export const herdrListAgents = (workspace: string) =>
   invoke<HerdrAgent[]>("herdr_list_agents", { workspace });
 export const dispatchToHerdr = (
-  taskId: string, agentName: string, workspace: string, promptText: string,
+  taskId: string, agentName: string, workspace: string, promptText: string, operationId: string,
 ) => invoke<DispatchRecord>("dispatch_to_herdr", {
-  taskId, agentName, workspace, promptText,
+  taskId, agentName, workspace, promptText, operationId,
 });
+export const resolveDispatch = (taskId: string, operationId: string, sent: boolean, evidence: string) =>
+  invoke<void>("resolve_dispatch", { taskId, operationId, sent, evidence });
+export const repairBinding = (taskId: string, paneId: string) => invoke<void>("repair_binding", { taskId, paneId });
+export interface TerminalOutput { kind: "data" | "closed"; data: number[]; message: string }
+export const openTerminal = (taskId: string, connectionId: string, cols: number, rows: number, onOutput: (packet: TerminalOutput) => void) => {
+  const output = new Channel<TerminalOutput>();
+  output.onmessage = onOutput;
+  return invoke<string>("terminal_open", { taskId, connectionId, cols, rows, output });
+};
+export const closeTerminal = (connectionId: string) => invoke<void>("terminal_close", { connectionId });
+export const inputTerminal = (connectionId: string, data: string) => invoke<void>("terminal_input", { connectionId, data });
+export const resizeTerminal = (connectionId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { connectionId, cols, rows });
+export const ackTerminal = (connectionId: string, bytes: number) => invoke<void>("terminal_ack", { connectionId, bytes });
 
 // ContextSwitcher
 export const readCsTasks = () => invoke<CsTask[]>("read_cs_tasks");

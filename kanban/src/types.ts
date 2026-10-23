@@ -10,6 +10,7 @@ export interface Project {
 }
 
 export interface Task {
+  binding?: TaskBinding | null;
   id: string;
   project_id: string;
   name: string;
@@ -20,6 +21,22 @@ export interface Task {
   dispatched_to: string | null;
   created_at: string;
   updated_at: string;
+}
+
+export interface HerdrTarget {
+  session: string;
+  workspace_id: string;
+  pane_id: string;
+  terminal_id: string;
+  agent: string;
+  process_id: string;
+  title: string;
+  status: string;
+}
+export interface TaskBinding {
+  state: "valid" | "reserved" | "pending" | "unknown" | "repair" | "unbound";
+  target: HerdrTarget | null;
+  operation: { id: string; prompt: string; created_at: string; target: HerdrTarget } | null;
 }
 
 export interface FileEntry {
@@ -34,6 +51,7 @@ export interface SkillEntry {
 }
 
 export interface HerdrAgent {
+  occupied_by?: string | null;
   name: string;
   status: string;
   pane_id: string;

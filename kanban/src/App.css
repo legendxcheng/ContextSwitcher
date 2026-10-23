@@ -623,3 +623,22 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; }
 }
+
+/* Task terminal workspace */
+.board-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; gap: 4px; }
+.board-workspace .kanban-columns { min-width: 0; grid-template-columns: repeat(3, minmax(200px, 1fr)); gap: 10px; }
+.terminal-panel { width: var(--terminal-width, 300px); flex-shrink: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #111; border: 1px solid var(--border); border-radius: var(--radius); }
+.terminal-header { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-bottom: 1px solid var(--border); }
+.terminal-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.terminal-header [role=status] { color: var(--text-muted); font-size: 12px; }
+.terminal-host { flex: 1; min-height: 0; min-width: 0; padding: 8px; overflow: hidden; }
+.terminal-hint, .terminal-feedback { padding: 12px; color: var(--text-muted); font-size: 14px; overflow-wrap: anywhere; }
+.terminal-feedback { max-height: 45%; overflow-y: auto; }
+.task-card.selected { border-color: var(--accent); outline: 1px solid var(--accent); }
+.task-header[role=button] { cursor: pointer; }
+.task-header[role=button]:focus-visible { outline: 2px solid var(--accent); outline-offset: 3px; }
+
+.terminal-splitter { width: 8px; flex: 0 0 8px; cursor: col-resize; touch-action: none; border-radius: 4px; background: transparent; }
+.terminal-splitter:hover, .terminal-splitter:focus-visible { background: var(--accent-dim); outline: 1px solid var(--accent); }
+.terminal-host > .xterm { height: 100%; }
+.dialog textarea { display: block; width: 100%; min-height: 80px; margin-top: 8px; }

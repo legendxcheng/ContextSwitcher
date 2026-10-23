@@ -5,7 +5,18 @@ import { invoke } from "@tauri-apps/api/core";
 import { KanbanBoard } from "./KanbanBoard";
 import type { HerdrAgent, Project, Task, TaskStatus } from "./types";
 
-vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
+// The terminal renderer is an external DOM/canvas system, simulated at that boundary.
+vi.mock("@xterm/xterm", () => ({ Terminal: class {
+  cols = 80; rows = 24; options = {}; textarea = document.createElement("textarea");
+  open(element: HTMLElement) { this.textarea.setAttribute("aria-label", "终端输入"); element.append(this.textarea); }
+  loadAddon() {} write(_data: unknown, done?: () => void) { done?.(); }
+  onData(callback: (data: string) => void) { this.textarea.oninput = () => callback(this.textarea.value); return { dispose() {} }; }
+  onResize() { return { dispose() {} }; } attachCustomKeyEventHandler() {} focus() { this.textarea.focus(); }
+  dispose() { this.textarea.remove(); }
+} }));
+vi.mock("@xterm/addon-fit", () => ({ FitAddon: class { fit() {} } }));
+vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 
 const project: Project = {
   id: "project-1", name: "测试项目", root_path: "E:/fixture",
@@ -16,6 +27,7 @@ const agent: HerdrAgent = {
 };
 let storedTask: Task;
 let availableAgents: HerdrAgent[];
+let extraTasks: Task[];
 const sendPrompt = vi.fn<(input: Record<string, string>) => Promise<void>>();
 
 beforeEach(() => {
@@ -29,15 +41,22 @@ beforeEach(() => {
     created_at: "2026-10-23", updated_at: "2026-10-23",
   };
   availableAgents = [agent];
+  extraTasks = [];
   sendPrompt.mockReset().mockResolvedValue(undefined);
   vi.mocked(invoke).mockImplementation(async (command, args) => {
     const input = args as Record<string, string>;
     switch (command) {
-      case "list_tasks": return [{ ...storedTask }];
+      case "list_tasks": return [{ ...storedTask }, ...extraTasks];
       case "herdr_list_agents": return availableAgents;
       case "update_task_status":
         storedTask.status = input.status as TaskStatus;
         return;
+      case "resolve_dispatch":
+        storedTask.binding = { state: "valid", target: storedTask.binding?.target ?? null, operation: null };
+        return;
+      case "repair_binding": storedTask.binding = { state: "valid", target: null, operation: null }; return;
+      case "terminal_open": return input.connectionId;
+      case "terminal_close": case "terminal_input": case "terminal_resize": case "terminal_ack": return;
       case "dispatch_to_herdr":
         await sendPrompt(input);
         // Mirror the backend contract: only successful dispatch changes status.
@@ -78,6 +97,86 @@ function expectNoStatusWrite() {
 }
 
 describe("拖入开发中列", () => {
+  it("快速切换后迟到的旧连接不能接收新任务的输入", async () => {
+    const target = { session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle" };
+    storedTask.binding = { state: "valid", operation: null, target };
+    extraTasks = [{ ...storedTask, id: "task-2", name: "任务 B", status: "in_progress", binding: { state: "valid", operation: null, target: { ...target, pane_id: "w1:p2", terminal_id: "term2" } } }];
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let finishA!: (value: string) => void;
+    let idA = ""; let idB = "";
+    vi.mocked(invoke).mockImplementation((command, args, options) => {
+      const input = args as Record<string, string>;
+      if (command === "terminal_open") {
+        if (input.taskId === "task-1") { idA = input.connectionId; return new Promise((resolve) => { finishA = resolve; }); }
+        idB = input.connectionId;
+      }
+      return base(command, args, options);
+    });
+    await renderBoard("in_progress");
+    fireEvent.click(screen.getByRole("button", { name: `查看终端：${storedTask.name}` }));
+    await screen.findByText("连接中…");
+    fireEvent.click(screen.getByRole("button", { name: "查看终端：任务 B" }));
+    await screen.findByText("已连接");
+    finishA(idA);
+    fireEvent.input(screen.getByLabelText("终端输入"), { target: { value: "only B" } });
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_input", { connectionId: idB, data: "only B" }));
+    expect(invoke).toHaveBeenCalledWith("terminal_close", { connectionId: idA });
+    expect(vi.mocked(invoke).mock.calls.some(([name, args]) => name === "terminal_input" && (args as Record<string, string>).connectionId === idA)).toBe(false);
+  });
+  it("可通过分隔线键盘调整终端宽度", async () => {
+    await renderBoard();
+    const separator = screen.getByRole("separator", { name: "调整终端宽度" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("300");
+    fireEvent.keyDown(separator, { key: "ArrowLeft" });
+    expect(separator.getAttribute("aria-valuenow")).toBe("324");
+  });
+  it("旧绑定可以明确修复，修复本身不派发提示词", async () => {
+    storedTask.binding = { state: "repair", target: null, operation: null };
+    await renderBoard("in_progress");
+    fireEvent.click(screen.getByRole("button", { name: "修复绑定" }));
+    fireEvent.change(await screen.findByLabelText("独立 Agent"), { target: { value: agent.pane_id } });
+    fireEvent.click(screen.getByRole("button", { name: "保存绑定" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("repair_binding", { taskId: "task-1", paneId: agent.pane_id }));
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+  it("选择开发中卡片连接其终端，编辑按钮不会触发重复连接", async () => {
+    storedTask.binding = { state: "valid", operation: null, target: {
+      session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1",
+      agent: "codex", process_id: "100", title: "A", status: "idle",
+    } };
+    await renderBoard("in_progress");
+    fireEvent.click(screen.getByRole("button", { name: `查看终端：${storedTask.name}` }));
+    await screen.findByText("已连接");
+    expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: "task-1", connectionId: expect.any(String) }));
+    const opened = vi.mocked(invoke).mock.calls.filter(([name]) => name === "terminal_open").length;
+    fireEvent.click(screen.getByRole("button", { name: "编辑" }));
+    expect(vi.mocked(invoke).mock.calls.filter(([name]) => name === "terminal_open")).toHaveLength(opened);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+  it("核实未知派发结果只记录确认，不重发提示词", async () => {
+    storedTask.binding = { state: "unknown", target: null, operation: {
+      id: "op-1", prompt: "一次任务", created_at: "2026-10-24", target: {
+        session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1",
+        agent: "codex", process_id: "100", title: "A", status: "idle",
+      },
+    } };
+    await renderBoard();
+    fireEvent.click(screen.getByRole("button", { name: "核实派发结果" }));
+    fireEvent.change(screen.getByLabelText("核实依据"), { target: { value: "已在目标终端确认收到" } });
+    fireEvent.click(screen.getByRole("button", { name: "确认已发送" }));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("resolve_dispatch", {
+      taskId: "task-1", operationId: "op-1", sent: true, evidence: "已在目标终端确认收到",
+    }));
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
+  it("其他任务占用的 Agent 不可选择，不能派发", async () => {
+    availableAgents = [{ ...agent, occupied_by: "another-task" }];
+    await renderBoard();
+    fireEvent.click(screen.getByRole("button", { name: "派发" }));
+    const option = await screen.findByRole("option", { name: /已被其他任务占用/ });
+    expect((option as HTMLOptionElement).disabled).toBe(true);
+    expect(sendPrompt).not.toHaveBeenCalled();
+  });
   it("打开派发弹窗，确认前保留原列和持久化状态", async () => {
     await renderBoard();
     dropOn(column("in_progress"));
@@ -110,6 +209,7 @@ describe("拖入开发中列", () => {
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledExactlyOnceWith({
       taskId: storedTask.id, agentName: agent.pane_id,
       workspace: project.herdr_workspace, promptText: "请修复拖放派发",
+      operationId: expect.any(String),
     }));
     expect(storedTask.status).toBe("todo");
     expect(within(column("todo")).getByText(storedTask.name)).toBeTruthy();

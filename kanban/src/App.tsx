@@ -45,7 +45,7 @@ export default function App() {
                 <span className="project-path" title={selectedProject.root_path}>{selectedProject.root_path}</span>
               </span>
             </div>
-            <KanbanBoard project={selectedProject} />
+            <KanbanBoard key={selectedProject.id} project={selectedProject} />
           </>
         ) : (
           <div className="empty-state">

@@ -1,6 +1,6 @@
 # Kanban 代码结构与关键流程分析
 
-分析日期：2026-10-23。范围：当前工作区 `kanban/` 的前端、Rust 后端、数据库及构建配置；同时核对主项目的 ContextSwitcher 任务序列化格式。结论以代码实现为依据，现有 `CLAUDE.md` 仅作为背景。本文记录当前实现，不代表后续改进已经完成。
+更新日期：2026-10-24。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 ## 1. 项目定位与架构边界
 
@@ -20,17 +20,22 @@ Kanban 是同一仓库中的独立桌面应用，使用 React + TypeScript 构�
 
 ```mermaid
 flowchart LR
-    UI[React 组件与局部状态] --> API[api.ts：17 个 invoke 封装]
-    API --> CMD[Tauri commands.rs]
+    UI[React 组件与局部状态] --> API[api.ts：Tauri IPC]
+    API --> CMD[commands.rs + work_commands.rs]
     CMD --> DB[(SQLite kanban.db)]
     CMD --> FILE[项目文件与 ~/.claude 技能]
     CMD --> CS[ContextSwitcher/tasks.json：只读]
     CMD --> CLI[Herdr CLI 子进程]
     CLI --> AGENT[已有 Agent pane]
+    CMD --> WF[workflow.rs：独占绑定与派发]
+    WF --> DB
+    CMD --> TERM[terminal.rs：连接与输入]
+    TERM --> CLI
+    TERM -->|Channel ANSI 流| UI
     CMD --> PICK[rfd 原生目录选择器]
 ```
 
-没有 HTTP 服务、任务队列、后台调度器、前后端事件订阅或 Agent 完成回调。数据通过 `invoke → Promise` 请求/响应传递；界面主要依靠操作后重新查询刷新。
+没有业务 HTTP 服务、后台任务调度器或 Agent 完成回调。CRUD 通过 `invoke → Promise` 请求/响应传递；终端输出通过 Tauri Channel 流式传递。Herdr 继续拥有底层 Agent 进程，看板只管理其查看连接。
 
 ## 2. 目录与入口
 
@@ -56,6 +61,10 @@ kanban/
 │  ├─ MentionNode.ts              自定义原子行内 mention 节点
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
+│  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次
+│  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
+│  ├─ DispatchRecovery.tsx         核实不确定的派发结果
+│  ├─ i18n.ts / locales/           新增界面的稳定翻译键
 │  ├─ dispatchUtils.ts             引用展开为最终提示词文本
 │  └─ Toast.tsx                    全局通知函数与展示容器
 ├─ src-tauri/
@@ -68,7 +77,11 @@ kanban/
 │     ├─ lib.rs                    初始化数据库、插件与命令注册
 │     ├─ db.rs                     数据路径、建表、轻量迁移
 │     ├─ models.rs                 Rust 模型及状态转换
-│     └─ commands.rs               全部 IPC 命令及外部集成
+│     ├─ commands.rs               CRUD、文件/技能和 CS 数据读取
+│     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
+│     ├─ workflow.rs               任务绑定、派发操作及恢复事务
+│     ├─ herdr.rs                  有界 CLI 调用、目标身份核验
+│     └─ terminal.rs               Herdr JSONL 控制流、输入与安全释放
 ├─ public/、src/assets/、src-tauri/icons/  静态资源和图标
 └─ dist/、node_modules/、src-tauri/target/ 构建产物与依赖目录
 ```
@@ -76,9 +89,9 @@ kanban/
 ### 2.1 桌面启动顺序
 
 1. [main.rs](kanban/src-tauri/src/main.rs) 调用 `kanban_lib::run()`；release 模式设置 Windows GUI subsystem。
-2. [lib.rs](kanban/src-tauri/src/lib.rs) 调用 `db_path()`，创建数据目录、打开 SQLite、执行 `db::init()`。
-3. 连接包装为 `DbState(Mutex<Connection>)`，交给 Tauri 托管。
-4. 注册 opener、shell 插件和 17 个业务命令，再启动 Tauri 窗口。
+2. [lib.rs](kanban/src-tauri/src/lib.rs) 创建数据目录，持有数据库实例锁，再打开 SQLite、执行迁移，将上次中断的 pending 派发标为 unknown。
+3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
+4. 注册插件、业务命令、Workflow 和 TerminalManager，再启动 Tauri 窗口；销毁窗口时释放本应用终端连接。
 5. [main.tsx](kanban/src/main.tsx) 挂载 `App`；`App` 加载项目，自动选择列表中的第一个有效项目。
 6. `KanbanBoard` 按项目 ID 加载卡片，按 workspace 名称查询 Agent。
 
@@ -122,17 +135,17 @@ flowchart TD
 | [DispatchDialog.tsx](kanban/src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
 | [Toast.tsx](kanban/src/Toast.tsx) | 通知数组及自增 ID | 模块级 `_notify` 指向容器回调，3 秒后删除通知 |
 
-没有 Redux、Zustand 或查询缓存层。`onChanged`、`onSaved` 等回调负责向上通知，父组件重新查询数据。`load()` 会把整个看板切换为 loading 分支，并非局部乐观更新。
+没有 Redux、Zustand 或查询缓存层。操作回调通知父组件重新查询，刷新期间保留已有卡片；只有首次空列表加载显示 loading 分支。请求代次阻止迟到列表覆盖新结果。App 用 Project ID 作为 KanbanBoard 的 key，切项目销毁旧任务选择、弹窗和终端连接。
 
 表单草稿只存在内存里。任务编辑没有自动保存或未保存提醒；“保存提示词”和“派发提示词”是两个独立动作，派发读取卡片中已保存的 `prompt_json`。
 
 ### 3.1 样式与交互实现
 
-[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 248px，窄窗口收为 216px。看板仍为三列 grid，每列至少 240px，不足时仅看板横向滚动；编辑侧栏宽 520px，保留 `max-width` 限制。动画包括侧栏滑入、遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
+[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 248px，窄窗口收为 216px。左侧三列 grid 等宽、每列至少 200px；右侧终端默认 300px，最小 280px，分隔线支持拖动和方向键。空间不足时仅三列区域横向滚动；编辑侧栏宽 520px，保留 `max-width` 限制。动画包括侧栏滑入、遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
 
 `App` 增加工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及聚焦底部输入框的新建按钮。Agent 派发区取消整体低透明度。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、编辑侧栏、派发对话框、引用候选与通知使用同一套主题。
 
-本次验证：`npm run build` 成功，现有 16 项拖放/派发测试通过；Edge 浏览器使用隔离的内存 IPC 样例检查 1280×800 和 900×600 布局，以及新任务聚焦、创建任务、编辑保存、编辑器内输入 N、派发预览与取消、项目表单和空看板。浏览器检查不代表 Tauri/WebView2、真实 SQLite 或真实 Herdr 派发已经验收。
+此前主题调整的浏览器模拟检查仅证明界面行为。本次补充了隔离 SQLite、真实 Tauri/WebView2 与 Windows Herdr 的终端输入和生命周期验收；见第 9 节及验收记录。
 
 看板使用原生 `draggable`、`dataTransfer` 与 React 拖放事件，没有使用已经安装的 `@dnd-kit/*`。`draggingIdRef` 是拖放时的首选任务 ID 来源，代码注释说明这是对 WebView2 中 `getData()` 可能为空的兼容措施。
 
@@ -166,25 +179,27 @@ flowchart TD
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
 | `created_at`、`updated_at` | 创建及最后修改时间；任务列表按创建时间排序 |
 
-SQL 只有 `projects` 和 `tasks` 两张表，索引为 `tasks(project_id)` 和 `tasks(status)`。没有列内排序字段、派发历史表、附件表、同步日志或执行结果表。
+新增数据表：
 
-`DispatchRecord` 是命令返回值，不是数据库实体。再次派发会覆盖 Task 上的旧快照和目标，无法从当前库结构恢复完整派发历史。后续修改任务正文不会同步修改旧快照；手动改状态也不会清除派发字段。
+| 表 | 约束及用途 |
+| --- | --- |
+| `task_bindings` | task_id 主键；`UNIQUE(session,pane_id)` 跨项目保障独占；保存完整目标身份和 valid/reserved 状态 |
+| `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
+| `schema_migrations` | 记录绑定与派发表的迁移版本，初始化可重复执行 |
+
+Task 上的 `binding` 是列表返回的派生字段，不写入旧 tasks 表。没有结构化绑定的旧开发中任务返回 repair，旧共享目标不会自动认领。完成或移回未开发保留绑定；删除解除绑定，保留派发审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
 
 ### 4.3 数据路径、迁移与约束
 
-默认数据库为 `%APPDATA%\herdr-kanban\kanban.db`。如果没有 `APPDATA`，代码回退到当前目录下 `herdr-kanban/kanban.db`。它与 `%APPDATA%\ContextSwitcher\tasks.json` 是两个独立数据源。
+默认数据库为 `%APPDATA%\herdr-kanban\kanban.db`；隔离验收可设置 `KANBAN_DATA_DIR`。它与 Python 主应用的 tasks.json 独立。启动持有同目录数据库锁，避免第二实例把活跃派发误判为中断；进程退出自动释放锁。
 
-初始化先执行 `CREATE TABLE/INDEX IF NOT EXISTS`，然后尝试 `ALTER TABLE projects ADD COLUMN cs_task_id TEXT` 并忽略结果。这能容忍重复添加列，但也会隐藏其他迁移错误；没有 schema version 或有序迁移记录。
-
-任务外键声明 `ON DELETE CASCADE`，项目删除命令只执行一条项目 DELETE。应用没有显式设置 `PRAGMA foreign_keys`；本次核对本机锁定依赖 `libsqlite3-sys 0.30.1` 的 bundled 构建源码，默认编译参数包含 `SQLITE_DEFAULT_FOREIGN_KEYS=1`。因此不能仅凭缺少 PRAGMA 就断言当前构建不会级联删除。若切换 SQLite 构建方式，应显式初始化并验证这一约束；本次没有操作真实数据库做删除验收。
-
-`status` 没有 SQL CHECK 约束。Rust 更新命令接收任意字符串，而读取时 `TaskStatus::from_str()` 将未知值映射为 `todo`，可能掩盖库内异常状态。UPDATE/DELETE 也未检查受影响行数，ID 不存在时可能返回成功。
+显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经派发确认。pending/unknown 操作阻止删除相关任务/项目和变更状态，以保留核实证据。
 
 ## 5. IPC 命令契约
 
-[api.ts](kanban/src/api.ts) 是唯一的前端 invoke 入口；[lib.rs](kanban/src-tauri/src/lib.rs) 注册命令；[commands.rs](kanban/src-tauri/src/commands.rs) 实现全部业务。
+[api.ts](kanban/src/api.ts) 是唯一的前端 invoke 入口；[lib.rs](kanban/src-tauri/src/lib.rs) 注册命令；[commands.rs](kanban/src-tauri/src/commands.rs) 实现 CRUD，[work_commands.rs](kanban/src-tauri/src/work_commands.rs) 适配派发和终端服务。
 
-参数在 TypeScript invoke 对象中使用 camelCase，例如 `rootPath`、`projectId`；Rust 函数参数和返回结构字段使用 snake_case。Rust 的 `Result<T, String>` 对应前端成功值或 Promise rejection，错误没有结构化分类。
+参数在 TypeScript invoke 对象中使用 camelCase，例如 `rootPath`、`projectId`；Rust 函数参数和返回结构字段使用 snake_case。Rust 的 `Result<T, String>` 对应前端成功值或 Promise rejection，新增业务错误使用稳定 key 前缀，由 React i18n 映射；CLI 细节作为附加诊断。
 
 | 命令 | 主要输入 | 返回/副作用 |
 | --- | --- | --- |
@@ -201,8 +216,15 @@ SQL 只有 `projects` 和 `tasks` 两张表，索引为 `tasks(project_id)` 和 
 | `search_skills` | query | 最多 30 个 SkillEntry |
 | `read_file_content` | absPath | UTF-8 文件全文 |
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
-| `herdr_list_agents` | workspace | 根据标签/目录名筛选的 HerdrAgent[] |
-| `dispatch_to_herdr` | taskId、agentName、workspace、promptText | 执行 CLI 后更新卡片，返回 DispatchRecord |
+| `herdr_list_agents` | workspace | 精确 workspace 标签匹配，返回带 occupied_by 的 Agent 列表 |
+| `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId | 后端从项目解析 workspace，预占后发送并落库 |
+| `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
+| `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
+| `terminal_open` | taskId、connectionId、cols、rows、output Channel | 从任务解析有效目标；创建控制流 |
+| `terminal_input` | connectionId、data | 再核验任务、绑定及身份后转发输入 |
+| `terminal_resize` | connectionId、cols、rows | 有界尺寸更新 |
+| `terminal_ack` | connectionId、bytes | 渲染消费确认，释放输出配额 |
+| `terminal_close` | connectionId | 只释放指定查看连接 |
 | `pick_folder` | 无 | 原生目录选择结果；取消返回 null |
 | `read_cs_tasks` | 无 | CS 任务摘要 CsTask[] |
 
@@ -232,7 +254,7 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 
 列之间允许迁移，包括 done 回 todo；从 todo 或 done 进入 in_progress 必须经过派发确认。同一列内部没有手动排序，也没有顺序持久化。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
 
-看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，聚焦新增输入框；输入框 Enter 新建，Escape 清空并失焦。全局快捷键仅排除了 input/textarea，未排除 Tiptap 的 contenteditable，存在编辑器输入 `n` 被抢焦点的代码路径。
+看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，聚焦新增输入框；输入框 Enter 新建，Escape 清空并失焦。全局快捷键排除 input、textarea、contenteditable 和右侧终端，终端键盘事件不冒泡至看板。
 
 ### 6.3 @ 文件与 $ 技能引用
 
@@ -273,27 +295,26 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 ```mermaid
 sequenceDiagram
     participant UI as DispatchDialog
-    participant R as Rust commands
-    participant H as Herdr CLI
+    participant W as Workflow
     participant DB as SQLite
-    UI->>R: herdr_list_agents(workspace)
-    R->>H: herdr agent list
-    R->>H: herdr workspace list
-    R-->>UI: 筛选后的 Agent 列表
-    Note over UI: 用户选择 pane 并确认派发
-    UI->>R: 逐个 read_file_content/read_skill_content
-    R-->>UI: 引用当前文件正文
-    UI->>R: dispatch_to_herdr(taskId, paneId, workspace, text)
-    R->>H: herdr agent prompt paneId text
-    H-->>R: 进程退出状态
-    R->>DB: 更新为 in_progress，写入快照与目标
-    R-->>UI: DispatchRecord
-    Note over UI: 关闭对话框并重新加载卡片
+    participant H as Herdr CLI
+    UI->>W: dispatch(task, pane, resolved prompt, operation ID)
+    W->>H: 校验 workspace、pane、terminal、Agent 进程身份
+    W->>DB: 事务预占唯一目标 + 持久化 pending 操作
+    W->>H: 再核验身份并发送 prompt
+    alt 明确成功
+        W->>DB: 事务提交快照、in_progress、valid、sent
+    else 结果不确定或成功后落库失败
+        W->>DB: unknown，保留预占和证据
+        W-->>UI: 核实入口；不自动重发
+    else 明确未发送
+        W->>DB: not_sent，释放新增预占或恢复原绑定
+    end
 ```
 
-**Agent 发现。** 后端解析 `herdr agent list` 的 `result.agents`，再读取 `herdr workspace list` 建立 workspace_id → label 映射。非空 workspace 以大小写不敏感的子串匹配 label 或 Agent cwd 的末级目录；不是精确身份匹配。workspace map 读取失败时静默回退空映射，仍可能通过 cwd 命中。workspace 参数为空则不筛选。
+**Agent 发现。** 精确匹配唯一 workspace label，读取 agent list 与 pane process-info；缺失、歧义或无法核实身份的目标不可选。目标身份包含 session、workspace ID、pane ID、terminal ID、Agent 类型以及 shell PID/前台进程组。标题只展示，不参与身份判定。默认使用本机 default session。
 
-顶部 Agent 栏只在 workspace 名称变化时查询，不定时刷新；派发对话框挂载时会再次查询。代码不依据 Agent 状态禁止发送，也不创建、唤醒或切换 workspace。
+派发和修复对话框可以刷新列表，其他任务占用目标显示为禁用；后端数据库约束仍是最终保障。再派发复用已有有效目标。顶部 Agent 栏在项目 workspace 变化时刷新，其拖放仍需进入对话框确认，不直接发送。
 
 **预览。** `buildPreview()` 调用本地 `extractTextWithMentions()`，只展示普通文本与 `[@文件: ...]`、`[$技能: ...]` 占位符，没有读取引用正文。2026-10-24 将按钮文案改为“预览提示词”，避免暗示已展开引用；解析行为保持不变。
 
@@ -301,29 +322,30 @@ sequenceDiagram
 
 引用读取按文档顺序逐个 await，无缓存和去重。每次派发读取当时的文件内容，可能与编写提示词时不同。单个引用读取失败会替换为“引用失败”文本并继续发送；参数 `_rootPath` 当前未使用，读取路径不会重新限制在项目根目录内。
 
-**执行及落库。** 后端仅先检查最终文本非空，然后用参数数组执行 `herdr agent prompt <pane_id> <prompt_text>`；没有设置 `current_dir`，也没有通过 shell 拼接命令。workspace 参数不传给该 CLI，只用于数据库记录与返回值。
+**执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒、stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。返回成功意味着 Herdr 控制接口确认了 prompt 请求且数据库提交成功，不代表 Agent 已完成业务。
 
-退出码成功后，后端更新任务为 in_progress 并保存快照、目标和时间。派发命令未解析成功 stdout，也没有等待 Agent 完成任务。故此处的“成功”只证明 CLI 返回成功且后续 SQL 未报错，不能等同于 Agent 已接受、开始或完成业务。
+### 6.5 右侧终端与恢复
+
+点击开发中卡片先更新本地高亮和标题，TerminalPanel 创建唯一 connectionId，经 terminal_open 请求任务对应的目标。旧 effect 立即禁用输入、清理 xterm 和监听器、按旧 ID 释放连接；迟到输出不能写入新的 xterm。完成、移回 todo、删除及切项目也清理连接。
+
+本机 Herdr 的 Windows `agent attach` 实测不支持直接连接，因此使用同版本已验证的 `terminal session control <pane> --cols N --rows N` JSONL 控制协议。Rust 将 terminal.frame 的 base64 ANSI 数据送入 xterm，将输入/resize 转为 terminal.input/terminal.resize；关闭发送 terminal.release，只终止本应用控制器，不关闭底层 pane/Agent。没有强制 takeover。
+
+连接首帧限时 8 秒；每个输入批次重新核验目标，后台每 2 秒检查身份。输出分片 8 KiB，未消费窗口约 128 KiB，消费停滞 10 秒断开；单帧上限 8 MiB，前端 scrollback 3000 行，输入队列上限 64 KiB。断线时禁用输入并提供重连/修复入口。重连只建立查看连接，修复只改绑定，两者均不调用 prompt。
 
 ## 7. 当前实现的关键边界与维护风险
 
 以下区分可直接确认的行为与需要运行时复现的风险，不把静态分析当成桌面验收。
 
-| 优先级 | 代码位置与事实 | 影响/建议 |
-| --- | --- | --- |
-| 高 | `dispatch_to_herdr` 先执行外部发送，再更新 DB；无派发 ID、幂等记录或补偿 | 外部成功而落库失败时，UI 显示失败但 Agent 可能已收到；直接重试可能重复发送。需定义“发送结果不确定”状态及重试契约 |
-| 高 | 派发前不检查任务是否存在，SQL 不检查更新行数 | 已删除或错误 task ID 仍可能发送并返回成功；应先校验目标及任务，再检查写入结果 |
-| 高 | `KanbanBoard` 在项目切换时复用组件，任务/Agent 请求没有过期结果保护；`pendingDispatch` 未按项目清空 | 快速切换可能出现旧响应覆盖新看板；旧待派发 task 可能搭配新 Project 参数。需项目级请求身份和弹层生命周期隔离，并做交互复现 |
-| 高 | `Command::output()` 无超时、取消或输出大小限制；关闭派发弹窗不取消后端工作 | CLI 卡住时请求无法及时结束，关闭后重开还可能再次提交；需有界执行与在途派发状态 |
-| 中 | workspace 子串匹配，派发命令不复核 pane 所属 workspace | 同名片段、重命名或过期 pane 可导致目标混淆；适合使用稳定 workspace ID 并复核目标 |
-| 中 | 展开函数使用引用路径直接读取全文；未限制大小、根目录、扩展名 | 根目录只是搜索起点，不是访问边界；大文件、二进制/非 UTF-8 文件或根外引用需明确处理规则 |
-| 中 | 最终 prompt 全文作为进程命令行参数 | 大量文件展开可能触及平台命令行长度限制；需核对 Herdr 是否支持 stdin/文件输入，再选择传输方式 |
-| 中 | 预览与发送使用两套文本转换逻辑，引用失败继续发送 | 用户看到的内容与实际收到的文本可能不同；宜共享解析结果并显式呈现失败引用 |
-| 已修复（2026-10-24） | 全局 N 快捷键增加 `isContentEditable` 判断 | 编辑 Tiptap 正文时不会抢走输入焦点；已用浏览器验证 |
-| 中 | 部分异步 CRUD 缺少 catch；读取 CS 任务失败被转换为空 | 错误反馈不一致；列表加载、拖放、完成、删除和目录选择需统一呈现错误 |
-| 中 | ALTER 错误全部忽略，状态及外部关联缺少后端约束 | 后续数据库演进容易出现静默异常；适合引入版本迁移和命令输入校验 |
-| 低 | PromptEditor 无显式 setContent 同步，面板只监听 task.id | 当前常规关闭重开可以重新初始化；若未来复用同一个编辑器切换任务/同步正文，需同步文档，避免旧内容残留 |
-| 低 | Toast 在 render 中写模块级回调，定时器无卸载清理 | 当前单根容器简单可用；多根、卸载和测试隔离时宜改为明确订阅/清理 |
+| 边界 | 当前状态 |
+| --- | --- |
+| 双重占用、派发重试、外部成功后落库失败 | 已由唯一约束、操作记录与人工核实覆盖；不确定目标继续隔离，其他 pane 可用 |
+| 项目/任务切换及迟到响应 | Project key、加载代次、connectionId 及终端取消共同隔离 |
+| Herdr 版本兼容 | 已实测当前 Windows 预览版；JSONL 控制协议变化需重新验收，失败不能降级为只读并宣称成功 |
+| 引用正文大小及根目录 | 仍直接读取引用路径全文；超大或根外引用不在本次范围 |
+| prompt 作为命令行参数 | 仍受 Windows 命令行长度限制；启动前失败不伪装为发送成功 |
+| 预览与发送转换逻辑 | 仍分离，引用读取失败仍进入最终 prompt；非本次重构范围 |
+| CRUD 与既有界面本地化 | 本次新增界面使用稳定键；原有界面未做全站迁移 |
+| Python 全量测试 | 现有 test_explorer_helper.py 语法错误阻断收集，见验收记录 |
 
 还有两项配置边界值得保留：`csp` 当前为 null；capabilities 声明 opener/shell 权限，但现有文件读取与进程执行走自定义 Rust 命令。不能把插件权限列表当作这些命令已经具备路径或目标校验的证据。
 
@@ -331,7 +353,7 @@ sequenceDiagram
 
 当前结构的优点是入口清楚、组件职责容易定位、IPC 集中、模型较小；SQL、CLI 和文件访问都留在 Rust，React 不直接持有数据库连接。对于本地单用户看板，这种结构便于快速迭代。
 
-主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`commands.rs` 同时承担数据访问、协议解析、目录遍历、进程执行与集成。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
+主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`workflow.rs` 集中处理绑定与派发一致性，`terminal.rs` 集中处理查看连接；`commands.rs` 保留既有 CRUD 和文件/技能读取。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
 
 | 要做的改动 | 首先阅读/修改 | 必须同步考虑 |
 | --- | --- | --- |
@@ -339,12 +361,12 @@ sequenceDiagram
 | 新增项目/任务字段 | models.rs、types.ts、db.rs、commands.rs、api.ts | SELECT 列顺序与 row_to_task、表单、迁移、现有库兼容 |
 | 修改提示词或引用格式 | PromptEditor、MentionNode、MentionPopover、dispatchUtils、DispatchDialog | 历史 prompt_json、预览一致性、失败引用、格式保留 |
 | 接入更多技能目录 | commands.rs 的 search_skills | 发现路径配置、去重、排序、缓存、完整 frontmatter 解析 |
-| 改 Herdr 协议或派发可靠性 | herdr_list_agents、fetch_workspace_label_map、dispatch_to_herdr | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
+| 改 Herdr 协议或派发可靠性 | herdr.rs、workflow.rs、work_commands.rs、terminal.rs | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
 | 增加 Agent 自动完成同步 | 独立结果接收/查询模块，加任务状态服务 | 任务与执行实例映射、重复/乱序通知、用户手动状态冲突；当前没有此链路 |
 | 加深 CS 集成 | read_cs_tasks、ProjectFormDialog、主项目序列化 | 稳定 workspace ID、completed/done 差异、单向/双向数据所有权 |
 | 修改布局与主题 | App.css、对应组件 | WebView2 原生拖放、最小窗口尺寸、遮罩层级和输入焦点 |
 
-可逐步抽出 `project_repository`、`task_repository`、`discovery`、`herdr_client`、`dispatch_service`：命令层只做输入/输出适配，Herdr client 管进程与协议，dispatch service 管任务校验及派发记录一致性。前端可将项目任务加载和弹层状态封装为项目范围的 hook，并将提示词解析变成预览/发送共用的一条链路。这些均为建议，当前代码尚未拆分。
+现已按实际业务边界拆出 Workflow、Herdr CLI 与 TerminalManager。后续若修改这些规则，优先通过命令所调用的服务入口验证任务状态、发送次数、SQLite 结果和底层进程生命周期，不为每个 CLI 子命令建立独立业务模型。
 
 ## 9. 构建检查与验收边界
 
@@ -370,17 +392,7 @@ npm run tauri build
 
 单独 `npm run dev` 或 `npm run preview` 只提供前端页面；当前没有浏览器 mock API，依赖 Tauri invoke 的功能需要桌面宿主。
 
-本次实际结果：
-
-| 检查 | 结果与范围 |
-| --- | --- |
-| TypeScript `tsc --noEmit` | 通过 |
-| `npm run build` | 通过；Vite 输出主 JS 约 640.42 kB，gzip 约 201.70 kB，并提示超过 500 kB 的 chunk 警告 |
-| `cargo check --offline --locked` | 通过；不等同于完整 release 打包或桌面运行 |
-| 自动化业务测试 | 新增 `src/KanbanBoard.test.tsx` 与 `npm test`：16 项组件交互回归通过，覆盖开发中列弹窗、取消、等待成功、失败、无 Agent、两种拖放 ID 来源、已完成任务重新派发、同列无操作、其他列迁移及原有按钮/Agent 入口。运行真实组件与 API 封装，模拟 Tauri IPC；不代表 Rust/CLI 或桌面 WebView2 实测。现有仓库 CI 只运行 Python pytest |
-| 桌面交互、真实数据库 CRUD、Herdr 派发 | 本次未执行；没有向真实 Agent 发送任务，也没有改动用户业务数据 |
-
-后续最有价值的验证是：快速切项目时的响应隔离、Tiptap 中输入 n、缺失/超大引用、Herdr 超时、外部发送成功但 DB 写入失败，以及实际 bundled 数据库的删除级联。这些场景对应当前结构中的真实边界，比只验证组件能渲染更能说明可靠性。
+本次结果和明确的覆盖限制集中维护在[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。前端组件测试只模拟 Tauri；真实 Windows 验收另行使用隔离数据库、真实 WebView2 和 Herdr Agent。Rust 的两个 live 测试默认 ignored，必须显式提供以 kanban-acceptance- 开头的测试 workspace 才能执行，不向个人工作 pane 发送探针。
 
 ## 10. 推荐阅读路线
 
@@ -388,8 +400,11 @@ npm run tauri build
 
 1. `types.ts → models.rs → db.rs`：厘清 Project、Task、引用和派发快照。
 2. `main.tsx → App.tsx → KanbanBoard.tsx`：理解页面和状态归属。
-3. `api.ts → lib.rs → commands.rs`：对应每个动作的 IPC、SQL 与外部副作用。
+3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
 4. `TaskEditPanel → PromptEditor → MentionNode/MentionPopover`：理解 prompt_json 如何产生。
 5. `DispatchDialog → dispatchUtils → dispatch_to_herdr`：理解“草稿、预览、实际发送、快照”之间的差异。
 6. `ProjectFormDialog → read_cs_tasks → 主项目 Task.to_dict()`：核对跨项目数据契约。
 
+## 11. 规格与实施对应
+
+已实现[任务独立 pane 与右侧交互终端规格](docs/superpowers/specs/2026-10-24-kanban-herdr-task-pane.md)的主流程，来源为 [GitHub #4](https://github.com/legendxcheng/ContextSwitcher/issues/4)，拆分为 #5–#9。实现采用当前 Windows Herdr 可用的 JSONL 控制流，替代原先待验证的 agent attach/伪终端方案。未验收的系统 DPI 与独立打包环境在验收记录中单列。

@@ -6,6 +6,10 @@ import { TaskEditPanel } from "./TaskEditPanel";
 import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon, type IconName } from "./Icon";
+import { DispatchRecovery } from "./DispatchRecovery";
+import { TerminalPanel } from "./TerminalPanel";
+import { BindingDialog } from "./BindingDialog";
+import { tr, errorText } from "./i18n";
 
 interface KanbanBoardProps {
   project: Project;
@@ -30,13 +34,41 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const [agents, setAgents] = useState<HerdrAgent[]>([]);
   const [dragOverAgent, setDragOverAgent] = useState<string | null>(null);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
+  const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
+  const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
+  const [repairingTaskId, setRepairingTaskId] = useState<string | null>(null);
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId && task.status === "in_progress") ?? null;
+  const suppressClick = useRef(false);
+  const workspaceRef = useRef<HTMLDivElement>(null);
+  const resizing = useRef(false);
+  const [terminalWidth, setTerminalWidth] = useState(300);
+  const [maximumWidth, setMaximumWidth] = useState(800);
+  const loadSequence = useRef(0);
+  useEffect(() => {
+    if (!workspaceRef.current) return;
+    const observer = new ResizeObserver(() => {
+      const width = workspaceRef.current?.clientWidth ?? 0;
+      if (width) {
+        const max = Math.max(280, width - 220);
+        setMaximumWidth(max); setTerminalWidth((current) => Math.min(current, max));
+      }
+    });
+    observer.observe(workspaceRef.current);
+    return () => observer.disconnect();
+  }, [loading]);
+  useEffect(() => {
+    if (selectedTaskId && !tasks.some((task) => task.id === selectedTaskId && task.status === "in_progress")) setSelectedTaskId(null);
+  }, [tasks, selectedTaskId]);
+  const setWidth = (width: number) => setTerminalWidth(Math.max(280, Math.min(maximumWidth, width)));
 
   // Pre-fetch agents for drag-to-dispatch chips
   useEffect(() => {
     if (!project.herdr_workspace) return;
+    let active = true;
     api.herdrListAgents(project.herdr_workspace)
-      .then(setAgents)
-      .catch(() => setAgents([]));
+      .then((items) => { if (active) setAgents(items); })
+      .catch(() => { if (active) setAgents([]); });
+    return () => { active = false; };
   }, [project.herdr_workspace]);
 
   async function handleAgentDrop(e: React.DragEvent, agent: HerdrAgent) {
@@ -51,16 +83,19 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   }
 
   async function load() {
+    const sequence = ++loadSequence.current;
     setLoading(true);
     try {
       const t = await api.listTasks(project.id);
-      setTasks(t);
+      if (sequence === loadSequence.current) setTasks(t);
+    } catch (e) {
+      if (sequence === loadSequence.current) notify(errorText(e), "error");
     } finally {
-      setLoading(false);
+      if (sequence === loadSequence.current) setLoading(false);
     }
   }
 
-  useEffect(() => { load(); }, [project.id]);
+  useEffect(() => { load(); return () => { ++loadSequence.current; }; }, [project.id]);
 
   // Keyboard shortcut: N to focus the new-task input
   useEffect(() => {
@@ -68,6 +103,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
       if (
         e.key === "n" &&
         !e.ctrlKey && !e.metaKey && !e.altKey &&
+        !(document.activeElement instanceof HTMLElement && document.activeElement.closest(".terminal-panel")) &&
         !(document.activeElement instanceof HTMLElement && document.activeElement.isContentEditable) &&
         !(document.activeElement instanceof HTMLInputElement) &&
         !(document.activeElement instanceof HTMLTextAreaElement)
@@ -111,11 +147,11 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
       setPendingDispatch({ task, paneId: "" });
       return;
     }
-    await api.updateTaskStatus(taskId, targetStatus);
-    await load();
+    try { await api.updateTaskStatus(taskId, targetStatus); await load(); }
+    catch (e) { notify(errorText(e), "error"); }
   }
 
-  if (loading) {
+  if (loading && tasks.length === 0) {
     return (
       <div className="board-loading">
         <span className="spinner" />
@@ -154,6 +190,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
           <span className="agent-bar-hint">拖拽任务到 Agent 即可选择派发</span>
         </div>
       )}
+      <div className="board-workspace" ref={workspaceRef} style={{ "--terminal-width": `${terminalWidth}px` } as React.CSSProperties}>
       <div className="kanban-columns">
       {COLUMNS.map(({ status, label, emptyIcon, emptyText, hint }) => {
         const col = tasks.filter((t) => t.status === status);
@@ -191,7 +228,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                       draggingIdRef.current = task.id;
                       setDraggingId(task.id);
                     }}
-                    onDragEnd={() => { draggingIdRef.current = null; setDraggingId(null); }}
+                    onDragEnd={() => { draggingIdRef.current = null; setDraggingId(null); suppressClick.current = true; setTimeout(() => { suppressClick.current = false; }, 0); }}
                     onDragOver={(e) => e.preventDefault()}
                     className={`card-wrapper${draggingId === task.id ? " dragging" : ""}`}
                   >
@@ -199,6 +236,10 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                       task={task}
                       project={project}
                       onChanged={load}
+                      onRecover={() => setRecoveringTaskId(task.id)}
+                      onRepair={() => setRepairingTaskId(task.id)}
+                      selected={selectedTaskId === task.id}
+                      onSelect={task.status === "in_progress" ? () => { if (!suppressClick.current) setSelectedTaskId(task.id); } : undefined}
                       onEditTask={setEditingTaskId}
                       onDispatchTask={(id) => {
                         const t = tasks.find((x) => x.id === id);
@@ -237,15 +278,36 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
         );
       })}
       </div>
+      <div role="separator" tabIndex={0} aria-label={tr("terminal.adjust_width")} aria-orientation="vertical"
+        aria-valuemin={280} aria-valuemax={maximumWidth} aria-valuenow={terminalWidth} className="terminal-splitter"
+        onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); setWidth(terminalWidth + (e.key === "ArrowLeft" ? 24 : -24)); } }}
+        onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); }}
+        onPointerMove={(e) => { if (resizing.current && workspaceRef.current) setWidth(workspaceRef.current.getBoundingClientRect().right - e.clientX); }}
+        onPointerUp={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }} />
+      <TerminalPanel task={selectedTask} onRepair={selectedTask ? () => {
+        if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
+        else setRepairingTaskId(selectedTask.id);
+      } : undefined} />
+      </div>
       {pendingDispatch && (
         <DispatchDialog
-          task={pendingDispatch.task}
+          key={pendingDispatch.task.id}
+          task={tasks.find((task) => task.id === pendingDispatch.task.id) ?? pendingDispatch.task}
           project={project}
           preselectedPaneId={pendingDispatch.paneId || undefined}
           onClose={() => setPendingDispatch(null)}
           onDispatched={() => { setPendingDispatch(null); load(); }}
+          onRefresh={load}
         />
       )}
+      {recoveringTaskId && (() => {
+        const task = tasks.find((task) => task.id === recoveringTaskId);
+        return task ? <DispatchRecovery key={task.id} task={task} onClose={() => setRecoveringTaskId(null)} onSaved={() => { setRecoveringTaskId(null); load(); }} /> : null;
+      })()}
+      {repairingTaskId && (() => {
+        const task = tasks.find((task) => task.id === repairingTaskId);
+        return task ? <BindingDialog key={task.id} task={task} project={project} onClose={() => setRepairingTaskId(null)} onSaved={() => { setRepairingTaskId(null); load(); }} /> : null;
+      })()}
       {editingTaskId && (() => {
         const t = tasks.find((x) => x.id === editingTaskId);
         return t ? (

@@ -47,6 +47,7 @@ impl TaskStatus {
 
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Task {
+    pub binding: Option<crate::workflow::Binding>,
     pub id: String,
     pub project_id: String,
     pub name: String,
