@@ -6,9 +6,11 @@ import { KanbanBoard } from "./KanbanBoard";
 import type { HerdrAgent, Project, Task, TaskStatus } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
+const terminalSize = vi.hoisted(() => ({ cols: 80, rows: 24 }));
 // The terminal renderer is an external DOM/canvas system, simulated at that boundary.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {
-  cols = 80; rows = 24; options = {}; textarea = document.createElement("textarea");
+  get cols() { return terminalSize.cols; } get rows() { return terminalSize.rows; }
+  options = {}; textarea = document.createElement("textarea");
   open(element: HTMLElement) { this.textarea.setAttribute("aria-label", "终端输入"); element.append(this.textarea); }
   loadAddon() {} write(_data: unknown, done?: () => void) { done?.(); }
   onData(callback: (data: string) => void) { this.textarea.oninput = () => callback(this.textarea.value); return { dispose() {} }; }
@@ -31,6 +33,7 @@ let extraTasks: Task[];
 const sendPrompt = vi.fn<(input: Record<string, string>) => Promise<void>>();
 
 beforeEach(() => {
+  terminalSize.cols = 80; terminalSize.rows = 24;
   vi.mocked(invoke).mockReset();
   storedTask = {
     id: "task-1", project_id: project.id, name: "修复拖放派发", status: "todo",
@@ -97,6 +100,29 @@ function expectNoStatusWrite() {
 }
 
 describe("拖入开发中列", () => {
+  it("连接等待期间改变终端尺寸，连接成功后同步最新尺寸", async () => {
+    storedTask.binding = { state: "valid", operation: null, target: {
+      session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle",
+    } };
+    const base = vi.mocked(invoke).getMockImplementation()!;
+    let connected!: (value: string) => void;
+    let connectionId = "";
+    vi.mocked(invoke).mockImplementation((command, args, options) => {
+      if (command === "terminal_open") {
+        connectionId = (args as Record<string, string>).connectionId;
+        return new Promise((resolve) => { connected = resolve; });
+      }
+      return base(command, args, options);
+    });
+    await renderBoard("in_progress");
+    fireEvent.click(screen.getByRole("button", { name: `查看终端：${storedTask.name}` }));
+    await screen.findByText("连接中…");
+    expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ cols: 80, rows: 24 }));
+    terminalSize.cols = 100; terminalSize.rows = 30;
+    connected(connectionId);
+    await screen.findByText("已连接");
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_resize", { connectionId, cols: 100, rows: 30 }));
+  });
   it("快速切换后迟到的旧连接不能接收新任务的输入", async () => {
     const target = { session: "default", workspace_id: "w1", pane_id: "w1:p1", terminal_id: "term1", agent: "codex", process_id: "100", title: "A", status: "idle" };
     storedTask.binding = { state: "valid", operation: null, target };

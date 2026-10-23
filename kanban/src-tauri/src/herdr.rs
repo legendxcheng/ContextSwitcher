@@ -109,6 +109,21 @@ impl Cli {
     fn json(&self, args: &[&str]) -> Result<Value, String> {
         self.request(args).map_err(|e| e.message)
     }
+    fn resolve_workspace_id(&self, workspace: &str) -> Result<String, String> {
+        let doc = self.json(&["workspace", "list"])?;
+        let spaces = doc
+            .pointer("/result/workspaces")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        let matches: Vec<_> = spaces
+            .iter()
+            .filter(|w| w.get("label").and_then(Value::as_str) == Some(workspace))
+            .collect();
+        if matches.len() != 1 {
+            return Err("binding.workspace_ambiguous".into());
+        }
+        Ok(field(matches[0], "workspace_id")?.to_string())
+    }
     pub fn live_target(&self, workspace_id: &str, agent: &Value) -> Result<Target, String> {
         if field(agent, "workspace_id")? != workspace_id {
             return Err("binding.identity_changed".into());
@@ -154,16 +169,7 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
 }
 impl Herdr for Cli {
     fn validate(&self, workspace: &str, expected: &Target) -> Result<Target, String> {
-        let doc = self.json(&["workspace", "list"])?;
-        let spaces = doc
-            .pointer("/result/workspaces")
-            .and_then(Value::as_array)
-            .ok_or("herdr.invalid_response")?;
-        let matches: Vec<_> = spaces
-            .iter()
-            .filter(|w| w.get("label").and_then(Value::as_str) == Some(workspace))
-            .collect();
-        if matches.len() != 1 || field(matches[0], "workspace_id")? != expected.workspace_id {
+        if self.resolve_workspace_id(workspace)? != expected.workspace_id {
             return Err("binding.workspace_ambiguous".into());
         }
         let doc = self.json(&["agent", "get", &expected.pane_id])?;
@@ -178,19 +184,7 @@ impl Herdr for Cli {
         }
     }
     fn targets(&self, workspace: &str) -> Result<Vec<Target>, String> {
-        let doc = self.json(&["workspace", "list"])?;
-        let spaces = doc
-            .pointer("/result/workspaces")
-            .and_then(Value::as_array)
-            .ok_or("herdr.invalid_response")?;
-        let matches: Vec<_> = spaces
-            .iter()
-            .filter(|w| w.get("label").and_then(Value::as_str) == Some(workspace))
-            .collect();
-        if matches.len() != 1 {
-            return Err("binding.workspace_ambiguous".into());
-        }
-        let id = field(matches[0], "workspace_id")?;
+        let id = self.resolve_workspace_id(workspace)?;
         let doc = self.json(&["agent", "list"])?;
         let agents = doc
             .pointer("/result/agents")
@@ -198,8 +192,8 @@ impl Herdr for Cli {
             .ok_or("herdr.invalid_response")?;
         Ok(agents
             .iter()
-            .filter(|a| a.get("workspace_id").and_then(Value::as_str) == Some(id))
-            .filter_map(|a| self.live_target(id, a).ok())
+            .filter(|a| a.get("workspace_id").and_then(Value::as_str) == Some(id.as_str()))
+            .filter_map(|a| self.live_target(&id, a).ok())
             .collect())
     }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError> {

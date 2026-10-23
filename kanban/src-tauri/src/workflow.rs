@@ -131,6 +131,26 @@ pub fn binding(conn: &Connection, task: &str) -> Result<Binding, String> {
     })
 }
 
+pub fn pane_owner(conn: &Connection, target: &Target) -> Result<Option<String>, String> {
+    conn.query_row(
+        "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2",
+        params![target.session, target.pane_id],
+        |r| r.get(0),
+    )
+    .optional()
+    .map_err(err)
+}
+fn ensure_available(conn: &Connection, target: &Target, task: &str) -> Result<(), String> {
+    if pane_owner(conn, target)?
+        .as_deref()
+        .is_some_and(|owner| owner != task)
+    {
+        Err("binding.occupied".into())
+    } else {
+        Ok(())
+    }
+}
+
 impl Workflow {
     pub fn repair(&self, task: &str, pane: &str) -> Result<(), String> {
         let workspace = self.workspace(task)?;
@@ -145,17 +165,7 @@ impl Workflow {
         if binding(&tx, task)?.operation.is_some() {
             return Err("dispatch.verify_required".into());
         }
-        let owner: Option<String> = tx
-            .query_row(
-                "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2",
-                params![target.session, pane],
-                |r| r.get(0),
-            )
-            .optional()
-            .map_err(err)?;
-        if owner.as_deref().is_some_and(|owner| owner != task) {
-            return Err("binding.occupied".into());
-        }
+        ensure_available(&tx, &target, task)?;
         tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'valid') ON CONFLICT(task_id) DO UPDATE SET session=excluded.session,pane_id=excluded.pane_id,target_json=excluded.target_json,state='valid'",
             params![task,target.session,pane,serde_json::to_string(&target).map_err(err)?]).map_err(err)?;
         tx.commit().map_err(err)
@@ -246,17 +256,7 @@ impl Workflow {
             {
                 return Err("binding.repair_required".into());
             }
-            let owner: Option<String> = tx
-                .query_row(
-                    "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2",
-                    params![target.session, pane],
-                    |r| r.get(0),
-                )
-                .optional()
-                .map_err(err)?;
-            if owner.as_deref().is_some_and(|id| id != task) {
-                return Err("binding.occupied".into());
-            }
+            ensure_available(&tx, &target, task)?;
             op = Operation {
                 id: operation.into(),
                 task_id: task.into(),

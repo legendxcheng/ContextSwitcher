@@ -70,6 +70,8 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
       if (!active || ended) { void api.closeTerminal(connectionId).catch(() => {}); return; }
       connected = true; terminal.options.disableStdin = false; setState("terminal.connected");
       fit.fit();
+      // fit may already have run during connect, without an active resize channel.
+      void api.resizeTerminal(connectionId, terminal.cols, terminal.rows).catch(fail);
     }).catch(fail);
     return () => {
       active = false; connected = false; clearTimeout(inputTimer); pendingInput = "";

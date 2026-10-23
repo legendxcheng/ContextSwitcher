@@ -14,12 +14,13 @@
 
 | 检查 | 结果 |
 | --- | --- |
-| `npm test` | 22 项通过；真实 React/API 封装，模拟 Tauri/xterm 外部边界 |
-| `npm run build` | TypeScript 与 Vite 通过；主 JS 约 993.49kB，gzip 292.25kB，存在 chunk 超过 500kB 的提示 |
+| `npm test` | 25 项通过；真实 React/API 封装，模拟 Tauri/xterm 外部边界；包含连接等待期间 resize 与语言回退回归 |
+| `npm run build` | TypeScript 与 Vite 通过；主 JS 约 993.81kB，gzip 292.41kB，存在 chunk 超过 500kB 的提示 |
 | `cargo test` | 11 项通过；2 项需要隔离 Herdr 的 live 测试默认 ignored |
 | `cargo fmt --check`、`cargo build` | 通过 |
 | 两个 ignored live 测试显式运行 | 在专用 Herdr workspace 中通过派发/独占、ANSI 输出/输入/resize/安全 detach；不把默认跳过计作通过 |
-| `python -m pytest tests -q` | 收集失败：原有 `tests/test_explorer_helper.py:181` 括号未闭合。本次没有修改该文件，不能宣称全仓库测试通过 |
+| `python -m pytest tests -q` | 收集被工作区已有 `tests/test_explorer_helper.py:181` 语法错误阻断；该文件被本机 `.git/info/exclude` 排除，最后修改于 2025-07-14，本次未修改 |
+| Git 跟踪的 Python 测试 | 对 `git ls-files tests/test_*.py` 返回的 14 个文件执行 pytest：110 项通过；不含上述本机额外文件 |
 
 Rust 覆盖：跨项目冲突、并发抢占、同一操作去重、有效绑定再派发、明确失败释放、未知结果恢复、发送后 SQL 失败、重复迁移/重开、旧共享修复不重发、身份变化拒绝、待建立连接取消，以及数据库实例锁。
 
@@ -53,3 +54,10 @@ Rust 覆盖：跨项目冲突、并发抢占、同一操作去重、有效绑定
 ## 维护入口
 
 新增 Herdr 版本后，先在专用 pane 验证 JSONL 控制流和安全 release，再执行 live 测试；不能仅凭帮助文本中存在 agent attach 判定 Windows 可用。所有 UI 模拟结果与原生验证保持分开记录。
+
+## 双轴代码审查
+
+以开发前提交 `f13362f` 为基线，按 code-review 技能并行审查 Standards 与 Spec。
+
+- Standards 初审：1 项 ADR 违反（写死中英文目录）、2 项重复逻辑建议。已用自动目录收集及统一语言回退修复 ADR 问题，并合并 workspace 解析、pane 归属查询/校验。
+- Spec 初审：1 项实现缺陷（连接期间 resize 丢失）。已在连接成功后显式发送最新尺寸，并增加迟到连接回归测试。其余验收覆盖缺口保留在上文，不作为已通过。

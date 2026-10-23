@@ -1,6 +1,5 @@
 use crate::terminal::{Output, TerminalManager};
 use crate::{models::DispatchRecord, workflow::Workflow};
-use rusqlite::OptionalExtension;
 use std::sync::Arc;
 use tauri::State;
 
@@ -25,14 +24,7 @@ pub async fn herdr_list_agents(
         targets
             .into_iter()
             .map(|target| {
-                let owner = conn
-                    .query_row(
-                        "SELECT task_id FROM task_bindings WHERE session=?1 AND pane_id=?2",
-                        [&target.session, &target.pane_id],
-                        |r| r.get(0),
-                    )
-                    .optional()
-                    .map_err(|e| e.to_string())?;
+                let owner = crate::workflow::pane_owner(&conn, &target)?;
                 Ok(AgentChoice {
                     name: target.agent,
                     status: target.status,
