@@ -1,5 +1,7 @@
 //! The external CLI boundary. Every request is bounded; arguments never use a shell.
 use crate::workflow::{Herdr, SendError, Target};
+#[path = "codex_process.rs"]
+mod codex_process;
 #[cfg(test)]
 #[path = "session_isolation_tests.rs"]
 mod session_isolation_tests;
@@ -424,8 +426,8 @@ impl Herdr for Cli {
         }
         // Codex defers the resume SessionStart hook until the first new input.
         // Before then, accept only our exact, independently observed resume
-        // command in the same live foreground process. Never use a saved ID or
-        // another pane's report as evidence that this process resumed it.
+        // command and unique session write lock in the same live foreground process.
+        // Never use a saved ID or another pane's report as evidence.
         if agent.get("interactive_ready").and_then(Value::as_bool) != Some(true) {
             return Ok(None);
         }
@@ -671,7 +673,11 @@ fn codex_resume_session(doc: &Value, target: &Target) -> Result<Option<String>, 
         return Ok(None);
     }
     uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
-    Ok(Some((*id).into()))
+    if codex_process::owns_only_session(group, id) {
+        Ok(Some((*id).into()))
+    } else {
+        Err("flow.session_mismatch".into())
+    }
 }
 
 // Windows Codex buffers pasted characters and can interpret Enter as a newline.

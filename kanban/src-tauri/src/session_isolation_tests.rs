@@ -10,7 +10,47 @@ fn operation() -> String {
 }
 
 #[test]
-#[ignore = "requires a dedicated Herdr workspace and isolated Codex home; starts and closes test panes"]
+#[ignore = "requires one isolated Codex pane switched from resume A to B without a new message"]
+fn live_completion_preserves_a_pane_with_ambiguous_resume_identity() {
+    let name = std::env::var("KANBAN_LIVE_SWITCHED_WORKSPACE")
+        .expect("explicit switched workspace required");
+    assert!(name.starts_with("kanban-acceptance-"));
+    let cwd = std::env::var("KANBAN_LIVE_CWD").unwrap();
+    let original = std::env::var("KANBAN_LIVE_ORIGINAL_SESSION").unwrap();
+    uuid::Uuid::parse_str(&original).unwrap();
+    let app = Workflow {
+        db: Arc::new(Mutex::new(Connection::open_in_memory().unwrap())),
+        herdr: Arc::new(Cli::from_env()),
+    };
+    let spaces = app.herdr.workspaces().unwrap();
+    let matches: Vec<_> = spaces.iter().filter(|w| w.name == name).collect();
+    assert_eq!(matches.len(), 1);
+    let workspace = &matches[0].id;
+    let targets = app.herdr.targets(workspace).unwrap();
+    assert_eq!(targets.len(), 1);
+    let task = {
+        let db = app.db.lock().unwrap();
+        crate::db::init(&db).unwrap();
+        db.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status) VALUES ('test','test',?1,?2,'now',?3,?4,'ready')",params![cwd,name,app.herdr.session(),workspace]).unwrap();
+        let task = tasks::create(&db, "test", "switched", TaskPriority::Normal, "{}").unwrap();
+        db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,'now')",params![task.id,original,cwd]).unwrap();
+        task
+    };
+    app.repair(&task.id, &targets[0].pane_id).unwrap();
+    let outcome = app.complete_task(&task.id, &operation()).unwrap();
+    assert_eq!(outcome.warning.as_deref(), Some("flow.session_mismatch"));
+    assert!(app.herdr.pane_exists(&targets[0]).unwrap());
+    let tasks = tasks::list(&app.db.lock().unwrap(), "test").unwrap();
+    assert!(tasks[0].cleanup_required);
+    assert_eq!(
+        tasks[0].flow.as_ref().unwrap().session_id.as_deref(),
+        Some(original.as_str())
+    );
+    assert!(tasks[0].binding.as_ref().unwrap().target.is_some());
+}
+
+#[test]
+#[ignore = "requires a dedicated Herdr workspace with trusted Codex integration; starts and closes test panes"]
 fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
     let name = std::env::var("KANBAN_LIVE_WORKSPACE").expect("explicit workspace required");
     assert!(name.starts_with("kanban-acceptance-"));

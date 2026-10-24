@@ -407,13 +407,13 @@ sequenceDiagram
 
 - 首次启动先写 pending 生命周期意图。使用项目稳定 workspace ID，仅选择目录一致、未被任何卡片占用的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。候选在数据库事务中唯一预占，冲突继续下一个。没有候选时新建同 workspace 独立 tab，目录为项目根目录、标签为 `kanban-<操作 UUID>`，不抢 Herdr 焦点。
 - 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；新建与恢复均显式使用 `--no-daemon`，恢复通过命令行 `codex --no-daemon resume <UUID> -C <目录>` 执行。保留原有效任务绑定时直接连接，不创建或发送。
-- 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
+- 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 与 Windows 唯一会话写锁核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
 - 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
 - 成功完成后的任务返回 dormant，恢复时不解析历史提示词、不发送原 prompt，精确确认恢复的 ID 后进入开发中。旧会话 ID 不会被一次错误 resume 的 ID 覆盖。
 - 启动超时或落库失败保留 unknown 与占用；提示词发送结果仍走原 `DispatchRecovery`，用户核实后再点击“核实启动结果”。核实本身不发送、启动或关闭；已确认派发、精确恢复的会话可以完成落库，否则必须确认本次启动的 pane 已不存在才释放。创建响应丢失时按唯一 tab 标签核实，不盲目新建。
 - 启动和关闭的未知结果仅影响相关任务。延迟核实请求不能覆盖新操作；删除相关任务/项目和修改项目配置受到未决操作约束。
 
-2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；上报缺失时，仅在目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用的独立 resume 命令时取得 UUID，允许不发消息直接完成。其他缺 ID 情况仍保留窗口；不从历史 ID 或其他窗口猜测，不发送恢复探测消息。新增真实生命周期回归及 Windows Tauri/WebView2 双任务新建、完成、应用重开、命令行恢复、不重发和归档验收通过；异常故障注入、未覆盖场景与证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。
+2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；上报缺失时，仅在目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用的独立 resume 命令、`codex_process.rs` 确认该进程只打开目标 UUID 的会话写锁时取得 UUID，允许不发消息直接完成。进程内切换对话会保留旧 argv，因此多会话写锁、句柄查询失败或非 Windows 均拒绝此补充分支并保留窗口；真实切换会话拒绝回归已通过。其他缺 ID 情况仍保留窗口；不从历史 ID 或其他窗口猜测，不发送恢复探测消息。新增真实生命周期回归及 Windows Tauri/WebView2 双任务新建、完成、应用重开、命令行恢复、不重发和归档验收通过；异常故障注入、未覆盖场景与证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。
 
 ### 6.6.1 看板立即响应与后台启动（GitHub #16）
 
