@@ -3,6 +3,8 @@ import type { Task, Project } from "./types";
 import { PromptEditor } from "./PromptEditor";
 import * as api from "./api";
 import { notify } from "./Toast";
+import { PrioritySelect } from "./PrioritySelect";
+import { tr } from "./i18n";
 
 interface TaskEditPanelProps {
   task: Task;
@@ -14,12 +16,14 @@ interface TaskEditPanelProps {
 export function TaskEditPanel({ task, project, onClose, onSaved }: TaskEditPanelProps) {
   const [name, setName] = useState(task.name);
   const [promptJson, setPromptJson] = useState(task.prompt_json);
+  const [priority, setPriority] = useState(task.priority);
   const [saving, setSaving] = useState(false);
 
   // Sync if the task prop changes (e.g., board refresh while panel is open)
   useEffect(() => {
     setName(task.name);
     setPromptJson(task.prompt_json);
+    setPriority(task.priority);
   }, [task.id]);
 
   const handleKeyDown = useCallback((e: KeyboardEvent) => {
@@ -35,7 +39,7 @@ export function TaskEditPanel({ task, project, onClose, onSaved }: TaskEditPanel
     if (!name.trim()) return;
     setSaving(true);
     try {
-      await api.updateTask(task.id, name.trim(), promptJson);
+      await api.updateTask(task.id, name.trim(), promptJson, priority);
       notify("保存成功");
       onSaved();
       onClose();
@@ -74,6 +78,10 @@ export function TaskEditPanel({ task, project, onClose, onSaved }: TaskEditPanel
               rootPath={project.root_path}
               onChange={setPromptJson}
             />
+          </div>
+          <div>
+            <label className="field-label" htmlFor="edit-task-priority">{tr("priority.label")}</label>
+            <PrioritySelect id="edit-task-priority" label={tr("priority.label")} value={priority} onChange={setPriority} disabled={saving} />
           </div>
         </div>
         <div className="slideover-footer">

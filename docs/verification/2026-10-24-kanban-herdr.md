@@ -65,3 +65,19 @@ Rust 覆盖：跨项目冲突、并发抢占、同一操作去重、有效绑定
 - Standards 初审：1 项 ADR 违反（写死中英文目录）、2 项重复逻辑建议。已用自动目录收集及统一语言回退修复 ADR 问题，并合并 workspace 解析、pane 归属查询/校验。
 - Spec 初审：1 项实现缺陷（连接期间 resize 丢失）。已在连接成功后显式发送最新尺寸，并增加迟到连接回归测试。其余验收覆盖缺口保留在上文，不作为已通过。
 - 两路分别复核修复提交后，Standards 剩余原发现 0 项，Spec 剩余代码缺陷 0 项；环境验收缺口仍保留。
+
+## 技能引用与 Windows Codex 自动提交修复
+
+2026-10-24 补充：用户报告技能被展开为正文，以及输入框停在 `[Pasted Content …]`。
+
+- 前端实际路径回归先失败：`resolveMentions` 将技能节点变成整份 SKILL.md。现在发送与预览均保留 `$技能名`；文件引用继续展开。
+- 本机 Herdr `0.8.0-preview.2026-08-04-d78e3d3b5126` + Codex `0.164.0`，专用 workspace 中复现 11,682 字符停在粘贴输入框。CLI 的成功响应没有证明需求已开始。
+- 对照本地 Herdr Git 对象：已安装提交 `d78e3d3b5126` 的 `src/app/api/agents.rs` 固定延迟 300ms 发 Enter；较新提交 `43b36b68` 使用非字符按键结束 Windows Codex 的粘贴缓冲。看板兼容处理为发送正文、再次核验身份、发送 Right + Enter；不重复调用 agent prompt。
+- `pane send-text` 成功时没有 stdout，这是其 CLI `send_ok_request` 的正常行为；仅此命令接受空成功响应，其余 JSON 响应校验保留。
+- 正文发送后，即使后续 CLI 启动失败或身份改变，也保留 unknown 和预占，不自动重放正文。回归覆盖这些部分成功情况。
+- 真实 Rust Workflow → Herdr → Codex 的 ignored 测试已加强：发送超过 11K 字符的提示词，建立终端连接，并等待本次唯一标识的实际 Agent 回复。不是仅断言 CLI 成功或数据库状态。
+- 本次验证使用 `kanban-acceptance-prompt-20261024`、`kanban-acceptance-submit-20261024` 隔离 workspace，不向用户既有任务 pane 发送输入。
+
+前端组件测试与 Rust 单元测试分别覆盖技能预览/派发和失败隔离；真实长文本提交另行通过 live 测试。未重新执行全套原生 UI 生命周期、其他 Agent 或安装包验收。
+
+本次最终结果：前端 28 项通过，Rust 14 项通过（2 项 live 默认跳过），加强后的长文本 live 派发测试显式运行通过；前端生产构建、`cargo build --offline --locked`、`cargo fmt --check` 通过。前端保留原有大 chunk 提示。测试 workspace 已关闭，用户现有任务未重发。

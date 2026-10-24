@@ -1,6 +1,6 @@
 //! Task/pane ownership and dispatch, shared by the Tauri command boundary.
 use crate::models::DispatchRecord;
-use rusqlite::{Connection, OptionalExtension, params};
+use rusqlite::{params, Connection, OptionalExtension};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -21,6 +21,33 @@ pub struct SendError {
 }
 
 pub trait Herdr: Send + Sync {
+    fn available(&self, _workspace: &str, _cwd: &str) -> Result<Vec<Target>, String> {
+        Err("flow.unsupported".into())
+    }
+    fn create_pane(&self, _workspace: &str, _cwd: &str, _label: &str) -> Result<Target, String> {
+        Err("flow.unsupported".into())
+    }
+    fn prepare_codex(
+        &self,
+        _target: &Target,
+        _cwd: &str,
+        _resume: Option<&str>,
+        _name: &str,
+    ) -> Result<Target, String> {
+        Err("flow.unsupported".into())
+    }
+    fn session_id(&self, _target: &Target) -> Result<Option<String>, String> {
+        Ok(None)
+    }
+    fn pane_exists(&self, _target: &Target) -> Result<bool, String> {
+        Err("flow.unsupported".into())
+    }
+    fn close_pane(&self, _target: &Target) -> Result<(), String> {
+        Err("flow.unsupported".into())
+    }
+    fn find_created(&self, _workspace: &str, _label: &str) -> Result<Option<Target>, String> {
+        Err("flow.unsupported".into())
+    }
     fn targets(&self, workspace: &str) -> Result<Vec<Target>, String>;
     fn validate(&self, workspace: &str, expected: &Target) -> Result<Target, String> {
         self.targets(workspace)?
@@ -118,7 +145,16 @@ pub fn binding(conn: &Connection, task: &str) -> Result<Binding, String> {
                 |r| r.get(0),
             )
             .map_err(err)?;
-        if legacy {
+        let saved: bool = conn
+            .query_row(
+                "SELECT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)",
+                [task],
+                |r| r.get(0),
+            )
+            .map_err(err)?;
+        if saved {
+            "dormant".into()
+        } else if legacy {
             "repair".into()
         } else {
             "unbound".into()
@@ -162,6 +198,7 @@ impl Workflow {
             .ok_or("binding.missing")?;
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
+        crate::lifecycle::ensure_idle(&tx, task, None)?;
         if binding(&tx, task)?.operation.is_some() {
             return Err("dispatch.verify_required".into());
         }
@@ -171,7 +208,9 @@ impl Workflow {
         tx.commit().map_err(err)
     }
     fn workspace(&self, task: &str) -> Result<String, String> {
-        self.db.lock().map_err(err)?.query_row(
+        let db = self.db.lock().map_err(err)?;
+        crate::tasks::ensure_active(&db, task)?;
+        db.query_row(
             "SELECT p.herdr_workspace FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",
             [task],|r|r.get(0)).map_err(err)
     }
@@ -179,6 +218,7 @@ impl Workflow {
         binding(&*self.db.lock().map_err(err)?, task)
     }
     pub fn target(&self, task: &str, require_developing: bool) -> Result<Target, String> {
+        crate::lifecycle::ensure_idle(&*self.db.lock().map_err(err)?, task, None)?;
         let b = self.binding(task)?;
         if b.state != "valid" {
             return Err("binding.repair_required".into());
@@ -203,6 +243,16 @@ impl Workflow {
         pane: &str,
         prompt: &str,
         operation: &str,
+    ) -> Result<DispatchRecord, String> {
+        self.dispatch_inner(task, pane, prompt, operation, None)
+    }
+    pub(crate) fn dispatch_inner(
+        &self,
+        task: &str,
+        pane: &str,
+        prompt: &str,
+        operation: &str,
+        lifecycle: Option<&str>,
     ) -> Result<DispatchRecord, String> {
         if prompt.trim().is_empty() {
             return Err("dispatch.empty".into());
@@ -243,6 +293,7 @@ impl Workflow {
         {
             let mut conn = self.db.lock().map_err(err)?;
             let tx = conn.transaction().map_err(err)?;
+            crate::lifecycle::ensure_idle(&tx, task, lifecycle)?;
             let b = binding(&tx, task)?;
             if b.operation.is_some() {
                 return Err("dispatch.verify_required".into());
@@ -441,6 +492,82 @@ mod tests {
         )
     }
     #[test]
+    fn failed_archive_rolls_back_the_card_and_binding_then_retry_can_succeed() {
+        let (app, external) = fixture();
+        app.dispatch("a", "w1:p1", "Task A", "op-a").unwrap();
+        let mut db = app.db.lock().unwrap();
+        db.execute_batch("UPDATE tasks SET status='done' WHERE id='a';
+            CREATE TRIGGER fail_archive BEFORE DELETE ON task_bindings BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+        assert!(crate::tasks::archive(&mut db, "a").is_err());
+        assert_eq!(crate::tasks::list(&db, "p1").unwrap().len(), 1);
+        assert_eq!(binding(&db, "a").unwrap().target.unwrap().pane_id, "w1:p1");
+        db.execute_batch("DROP TRIGGER fail_archive").unwrap();
+        crate::tasks::archive(&mut db, "a").unwrap();
+        assert!(crate::tasks::list(&db, "p1").unwrap().is_empty());
+        assert_eq!(*external.sent.lock().unwrap(), vec!["Task A"]);
+    }
+
+    #[test]
+    fn archive_and_dispatch_are_mutually_exclusive() {
+        let (app, external) = fixture();
+        app.db
+            .lock()
+            .unwrap()
+            .execute("UPDATE tasks SET status='done' WHERE id='a'", [])
+            .unwrap();
+        let gate = std::sync::Barrier::new(2);
+        let (archived, dispatched) = std::thread::scope(|scope| {
+            let archive = scope.spawn(|| {
+                gate.wait();
+                crate::tasks::archive(&mut app.db.lock().unwrap(), "a")
+            });
+            let dispatch = scope.spawn(|| {
+                gate.wait();
+                app.dispatch("a", "w1:p1", "Once", "race")
+            });
+            (archive.join().unwrap(), dispatch.join().unwrap())
+        });
+        assert_ne!(archived.is_ok(), dispatched.is_ok());
+        if archived.is_ok() {
+            assert!(crate::tasks::list(&app.db.lock().unwrap(), "p1")
+                .unwrap()
+                .is_empty());
+            assert!(external.sent.lock().unwrap().is_empty());
+        } else {
+            assert_eq!(
+                crate::tasks::list(&app.db.lock().unwrap(), "p1").unwrap()[0].status,
+                crate::models::TaskStatus::InProgress
+            );
+            assert_eq!(*external.sent.lock().unwrap(), vec!["Once"]);
+        }
+    }
+
+    #[test]
+    fn archive_releases_ownership_for_the_next_task_and_rejects_late_activation() {
+        let (app, external) = fixture();
+        app.dispatch("a", "w1:p1", "Task A", "op-a").unwrap();
+        {
+            let mut db = app.db.lock().unwrap();
+            db.execute("UPDATE tasks SET status='done' WHERE id='a'", [])
+                .unwrap();
+            crate::tasks::archive(&mut db, "a").unwrap();
+        }
+        assert_eq!(app.repair("a", "w1:p1").unwrap_err(), "task.archived");
+        assert_eq!(
+            app.dispatch("a", "w1:p1", "late", "op-late").unwrap_err(),
+            "task.archived"
+        );
+        assert_eq!(
+            app.start_task("a", "late", &uuid::Uuid::new_v4().to_string())
+                .unwrap_err(),
+            "task.archived"
+        );
+        assert_eq!(app.target("a", true).unwrap_err(), "task.archived");
+        app.dispatch("b", "w1:p1", "Task B", "op-b").unwrap();
+        assert_eq!(*external.sent.lock().unwrap(), vec!["Task A", "Task B"]);
+    }
+
+    #[test]
     fn a_pane_cannot_receive_another_projects_task() {
         let (app, external) = fixture();
         assert_eq!(
@@ -626,10 +753,14 @@ mod tests {
             .unwrap();
         let targets = app.herdr.targets(&workspace).unwrap();
         let pane = &targets.first().expect("isolated agent required").pane_id;
+        let reply = format!(
+            "KANBAN_ACCEPT_{}",
+            &uuid::Uuid::new_v4().simple().to_string()[..8]
+        );
         app.dispatch(
             "a",
             pane,
-            "Reply only KANBAN_ACCEPT_A. Do not run commands or edit files.",
+            &format!("Reply only {reply}. Do not run commands or edit files. Ignore the following padding.\n{}", "padding ".repeat(1450)),
             "live-op",
         )
         .unwrap();
@@ -638,6 +769,38 @@ mod tests {
             app.dispatch("b", pane, "SHOULD_NOT_SEND", "live-other")
                 .unwrap_err(),
             "binding.occupied"
+        );
+        // A successful CLI response alone does not prove Enter submitted the
+        // prompt. Keep a real terminal attached and require the agent's reply.
+        let cli = crate::herdr::Cli::from_env();
+        let app = Arc::new(app);
+        let manager = crate::terminal::TerminalManager::default();
+        manager.select("submit-check", "a").unwrap();
+        manager
+            .open(app, &cli, "a", "submit-check", 100, 30, Arc::new(|_| true))
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(45);
+        let mut last_output = String::new();
+        let mut replied = false;
+        while std::time::Instant::now() < deadline {
+            let output = cli
+                .command()
+                .args([
+                    "agent", "read", pane, "--source", "visible", "--lines", "12",
+                ])
+                .output()
+                .unwrap();
+            last_output = String::from_utf8_lossy(&output.stdout).into_owned();
+            if last_output.contains(&format!("• {reply}")) {
+                replied = true;
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(300));
+        }
+        manager.close("submit-check");
+        assert!(
+            replied,
+            "prompt was not submitted or no reply arrived: {last_output}"
         );
     }
     #[test]

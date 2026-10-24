@@ -61,10 +61,15 @@ impl Cli {
         let out = read(Box::new(stdout));
         let errors = read(Box::new(stderr));
         let start = Instant::now();
+        let timeout = if args.starts_with(&["agent", "start"]) {
+            40
+        } else {
+            12
+        };
         let status = loop {
             match child.try_wait() {
                 Ok(Some(status)) => break Ok(status),
-                Ok(None) if start.elapsed() < Duration::from_secs(12) => {
+                Ok(None) if start.elapsed() < Duration::from_secs(timeout) => {
                     thread::sleep(Duration::from_millis(20))
                 }
                 _ => {
@@ -92,6 +97,13 @@ impl Cli {
                 uncertain: true,
             });
         }
+        // Unlike agent commands, pane send-text intentionally prints nothing
+        // after its server acknowledgement. Only this command accepts silence.
+        if (args.starts_with(&["pane", "send-text"]) || args.starts_with(&["pane", "close"]))
+            && stdout.iter().all(u8::is_ascii_whitespace)
+        {
+            return Ok(Value::Null);
+        }
         let doc: Value = serde_json::from_slice(&stdout).map_err(|_| SendError {
             message: "herdr.invalid_response".into(),
             uncertain: true,
@@ -105,6 +117,34 @@ impl Cli {
             });
         }
         Ok(doc)
+    }
+    fn check_target(&self, target: &Target) -> Result<(), SendError> {
+        // Revalidate immediately before sending, after the ownership reservation.
+        let doc = self
+            .json(&["agent", "get", &target.pane_id])
+            .map_err(|message| SendError {
+                message,
+                uncertain: false,
+            })?;
+        let live = self
+            .live_target(
+                &target.workspace_id,
+                doc.pointer("/result/agent").ok_or(SendError {
+                    message: "binding.missing".into(),
+                    uncertain: false,
+                })?,
+            )
+            .map_err(|message| SendError {
+                message,
+                uncertain: false,
+            })?;
+        if !live.same_identity(target) {
+            return Err(SendError {
+                message: "binding.identity_changed".into(),
+                uncertain: false,
+            });
+        }
+        Ok(())
     }
     fn json(&self, args: &[&str]) -> Result<Value, String> {
         self.request(args).map_err(|e| e.message)
@@ -168,6 +208,191 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn available(&self, workspace: &str, cwd: &str) -> Result<Vec<Target>, String> {
+        let workspace_id = self.resolve_workspace_id(workspace)?;
+        let doc = self.json(&["pane", "list", "--workspace", &workspace_id])?;
+        let panes = doc
+            .pointer("/result/panes")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        let mut targets = Vec::new();
+        for pane in panes {
+            let id = field(pane, "pane_id")?;
+            if let Ok((target, info)) = self.inspect_pane(&workspace_id, id) {
+                let dir = info
+                    .get("foreground_cwd")
+                    .and_then(Value::as_str)
+                    .or_else(|| info.get("cwd").and_then(Value::as_str));
+                if dir.is_some_and(|d| same_directory(d, cwd)) && self.ready(&target, &info) {
+                    targets.push(target);
+                }
+            }
+        }
+        targets.sort_by(|a, b| {
+            (a.agent.as_str(), a.pane_id.as_str()).cmp(&(b.agent.as_str(), b.pane_id.as_str()))
+        });
+        Ok(targets)
+    }
+    fn create_pane(&self, workspace: &str, cwd: &str, label: &str) -> Result<Target, String> {
+        if !std::path::Path::new(cwd).is_dir() {
+            return Err("flow.directory_missing".into());
+        }
+        let id = self.resolve_workspace_id(workspace)?;
+        let doc = self.json(&[
+            "tab",
+            "create",
+            "--workspace",
+            &id,
+            "--cwd",
+            cwd,
+            "--label",
+            label,
+            "--no-focus",
+        ])?;
+        let pane = doc
+            .pointer("/result/root_pane")
+            .ok_or("herdr.invalid_response")?;
+        let pane_id = field(pane, "pane_id")?;
+        // The pane identity is recorded even when shell initialization has not finished.
+        Ok(Target {
+            session: self.session.clone(),
+            workspace_id: id,
+            pane_id: pane_id.into(),
+            terminal_id: field(pane, "terminal_id")?.into(),
+            agent: String::new(),
+            process_id: String::new(),
+            title: label.into(),
+            status: "unknown".into(),
+        })
+    }
+    fn prepare_codex(
+        &self,
+        target: &Target,
+        cwd: &str,
+        resume: Option<&str>,
+        name: &str,
+    ) -> Result<Target, String> {
+        if let Some(id) = resume {
+            uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
+        }
+        if target.session != self.session {
+            return Err("binding.identity_changed".into());
+        }
+        let (live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+        if live.terminal_id != target.terminal_id
+            || live.agent != target.agent
+            || (!target.process_id.is_empty() && !live.same_identity(target))
+        {
+            return Err("binding.identity_changed".into());
+        }
+        if live.agent == "codex" {
+            if !self.ready(&live, &info) {
+                return Err("flow.not_idle".into());
+            }
+            self.check_target(&live).map_err(|e| e.message)?;
+            self.json(&["agent", "send-keys", &live.pane_id, "ctrl+u"])?;
+            self.send(&live, "/quit").map_err(|e| e.message)?;
+        } else if !live.agent.is_empty() {
+            return Err("flow.not_idle".into());
+        }
+        let deadline = Instant::now() + Duration::from_secs(10);
+        loop {
+            let (shell, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+            if shell.terminal_id != target.terminal_id {
+                return Err("binding.identity_changed".into());
+            }
+            if shell.agent.is_empty() && self.ready(&shell, &info) {
+                break;
+            }
+            if Instant::now() >= deadline {
+                return Err("flow.not_idle".into());
+            }
+            thread::sleep(Duration::from_millis(150));
+        }
+        let mut args = vec![
+            "agent",
+            "start",
+            name,
+            "--kind",
+            "codex",
+            "--pane",
+            &target.pane_id,
+            "--",
+        ];
+        if let Some(id) = resume {
+            args.extend(["resume", id]);
+        }
+        args.extend(["-C", cwd]);
+        self.json(&args)?;
+        let (live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+        if live.terminal_id != target.terminal_id
+            || live.agent != "codex"
+            || !self.ready(&live, &info)
+        {
+            return Err("flow.not_idle".into());
+        }
+        if let Some(expected) = resume {
+            let deadline = Instant::now() + Duration::from_secs(5);
+            loop {
+                if self.session_id(&live)?.as_deref() == Some(expected) {
+                    break;
+                }
+                if Instant::now() >= deadline {
+                    return Err("flow.session_mismatch".into());
+                }
+                thread::sleep(Duration::from_millis(150));
+            }
+        }
+        Ok(live)
+    }
+    fn session_id(&self, target: &Target) -> Result<Option<String>, String> {
+        self.check_target(target).map_err(|e| e.message)?;
+        let doc = self.json(&["agent", "get", &target.pane_id])?;
+        let agent = doc
+            .pointer("/result/agent")
+            .ok_or("herdr.invalid_response")?;
+        let live = self.live_target(&target.workspace_id, agent)?;
+        if !live.same_identity(target) {
+            return Err("binding.identity_changed".into());
+        }
+        codex_session_id(agent)
+    }
+    fn pane_exists(&self, target: &Target) -> Result<bool, String> {
+        if target.session != self.session {
+            return Err("binding.identity_changed".into());
+        }
+        let doc = self.json(&["pane", "list", "--workspace", &target.workspace_id])?;
+        let panes = doc
+            .pointer("/result/panes")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        // Missing IDs are definitive only after a successful list response, never from a CLI error.
+        Ok(panes
+            .iter()
+            .any(|p| p.get("pane_id").and_then(Value::as_str) == Some(&target.pane_id)))
+    }
+    fn close_pane(&self, target: &Target) -> Result<(), String> {
+        self.check_target(target).map_err(|e| e.message)?;
+        self.json(&["pane", "close", &target.pane_id])?;
+        Ok(())
+    }
+    fn find_created(&self, workspace: &str, label: &str) -> Result<Option<Target>, String> {
+        let id = self.resolve_workspace_id(workspace)?;
+        let doc = self.json(&["tab", "list", "--workspace", &id])?;
+        let tabs = doc
+            .pointer("/result/tabs")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        let matches: Vec<_> = tabs
+            .iter()
+            .filter(|t| t.get("label").and_then(Value::as_str) == Some(label))
+            .collect();
+        if matches.is_empty() {
+            return Ok(None);
+        }
+        // Do not reset an ambiguous creation; ask for explicit inspection of the labelled tab.
+        Err("flow.close_before_reset".into())
+    }
     fn validate(&self, workspace: &str, expected: &Target) -> Result<Target, String> {
         if self.resolve_workspace_id(workspace)? != expected.workspace_id {
             return Err("binding.workspace_ambiguous".into());
@@ -198,31 +423,183 @@ impl Herdr for Cli {
     }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError> {
         // Revalidate immediately before sending, after the ownership reservation.
-        let doc = self
-            .json(&["agent", "get", &target.pane_id])
-            .map_err(|message| SendError {
-                message,
-                uncertain: false,
-            })?;
-        let live = self
-            .live_target(
-                &target.workspace_id,
-                doc.pointer("/result/agent").ok_or(SendError {
-                    message: "binding.missing".into(),
-                    uncertain: false,
-                })?,
-            )
-            .map_err(|message| SendError {
-                message,
-                uncertain: false,
-            })?;
-        if !live.same_identity(target) {
-            return Err(SendError {
-                message: "binding.identity_changed".into(),
-                uncertain: false,
-            });
+        self.check_target(target)?;
+        #[cfg(windows)]
+        if target.agent == "codex" {
+            return submit_windows_codex(
+                &target.pane_id,
+                prompt,
+                |args| self.request(args).map(|_| ()),
+                || self.check_target(target),
+            );
         }
         self.request(&["agent", "prompt", &target.pane_id, prompt])
             .map(|_| ())
+    }
+}
+
+impl Cli {
+    fn inspect_pane(&self, workspace: &str, pane: &str) -> Result<(Target, Value), String> {
+        let doc = self.json(&["pane", "get", pane])?;
+        let mut info = doc
+            .pointer("/result/pane")
+            .ok_or("herdr.invalid_response")?
+            .clone();
+        if info.get("agent").and_then(Value::as_str).is_some() {
+            let doc = self.json(&["agent", "get", pane])?;
+            info = doc
+                .pointer("/result/agent")
+                .ok_or("herdr.invalid_response")?
+                .clone();
+            return Ok((self.live_target(workspace, &info)?, info));
+        }
+        if field(&info, "workspace_id")? != workspace {
+            return Err("binding.identity_changed".into());
+        }
+        let process = self.json(&["pane", "process-info", "--pane", pane])?;
+        let p = process
+            .pointer("/result/process_info")
+            .ok_or("herdr.invalid_response")?;
+        let shell = p.get("shell_pid").and_then(Value::as_u64).unwrap_or(0);
+        let group = p
+            .get("foreground_process_group_id")
+            .and_then(Value::as_u64)
+            .unwrap_or(0);
+        let shell_ready = shell != 0 && shell == group;
+        Ok((
+            Target {
+                session: self.session.clone(),
+                workspace_id: workspace.into(),
+                pane_id: pane.into(),
+                terminal_id: field(&info, "terminal_id")?.into(),
+                agent: String::new(),
+                process_id: format!("{shell}:{group}"),
+                title: String::new(),
+                status: if shell_ready { "idle" } else { "unknown" }.into(),
+            },
+            info,
+        ))
+    }
+    fn ready(&self, target: &Target, info: &Value) -> bool {
+        if target.agent.is_empty() {
+            return target.status == "idle";
+        }
+        target.agent == "codex"
+            && matches!(target.status.as_str(), "idle" | "done")
+            && info.get("interactive_ready").and_then(Value::as_bool) == Some(true)
+            && info.get("launch_pending").and_then(Value::as_bool) != Some(true)
+    }
+}
+fn same_directory(a: &str, b: &str) -> bool {
+    match (std::fs::canonicalize(a), std::fs::canonicalize(b)) {
+        (Ok(a), Ok(b)) => a == b,
+        _ => false,
+    }
+}
+fn codex_session_id(agent: &Value) -> Result<Option<String>, String> {
+    let Some(session) = agent.get("agent_session").filter(|s| !s.is_null()) else {
+        return Ok(None);
+    };
+    if session.get("agent").and_then(Value::as_str) != Some("codex")
+        || session.get("kind").and_then(Value::as_str) != Some("id")
+    {
+        return Ok(None);
+    };
+    let id = field(session, "value")?;
+    uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
+    Ok(Some(id.into()))
+}
+
+// Windows Codex buffers pasted characters and can interpret Enter as a newline.
+// A non-character key flushes that buffer synchronously before Enter. Do not also
+// call agent prompt here: its scheduled Enter would create a second submission.
+#[cfg(any(windows, test))]
+fn submit_windows_codex(
+    pane: &str,
+    prompt: &str,
+    mut request: impl FnMut(&[&str]) -> Result<(), SendError>,
+    revalidate: impl FnOnce() -> Result<(), SendError>,
+) -> Result<(), SendError> {
+    request(&["pane", "send-text", pane, prompt])?;
+    // Text may already be in the composer. Any later failure is uncertain, even
+    // if the next CLI could not start; retain the reservation and never replay.
+    let uncertain = |mut error: SendError| {
+        error.uncertain = true;
+        error
+    };
+    revalidate().map_err(uncertain)?;
+    request(&["agent", "send-keys", pane, "right", "enter"]).map_err(uncertain)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_submit_flushes_paste_before_one_enter() {
+        let mut calls = Vec::new();
+        submit_windows_codex(
+            "w1:p1",
+            "line one\nline two",
+            |args| {
+                calls.push(args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+                Ok(())
+            },
+            || Ok(()),
+        )
+        .unwrap_or_else(|e| panic!("{}", e.message));
+        assert_eq!(
+            calls,
+            vec![
+                vec!["pane", "send-text", "w1:p1", "line one\nline two"],
+                vec!["agent", "send-keys", "w1:p1", "right", "enter"],
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_failure_after_paste_is_uncertain_and_never_replayed() {
+        let mut count = 0;
+        let error = submit_windows_codex(
+            "w1:p1",
+            "once",
+            |_| {
+                count += 1;
+                if count == 1 {
+                    Ok(())
+                } else {
+                    Err(SendError {
+                        message: "could not start CLI".into(),
+                        uncertain: false,
+                    })
+                }
+            },
+            || Ok(()),
+        )
+        .unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(count, 2);
+    }
+
+    #[test]
+    fn codex_identity_change_after_paste_prevents_enter_and_requires_verification() {
+        let mut count = 0;
+        let error = submit_windows_codex(
+            "w1:p1",
+            "once",
+            |_| {
+                count += 1;
+                Ok(())
+            },
+            || {
+                Err(SendError {
+                    message: "binding.identity_changed".into(),
+                    uncertain: false,
+                })
+            },
+        )
+        .unwrap_err();
+        assert!(error.uncertain);
+        assert_eq!(count, 1);
     }
 }

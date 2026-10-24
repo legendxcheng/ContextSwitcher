@@ -1,7 +1,7 @@
-use crate::models::{CsTask, Project, Task, TaskStatus};
+use crate::models::{CsTask, Project, Task, TaskPriority};
 use chrono::Utc;
 use rfd;
-use rusqlite::{Connection, params};
+use rusqlite::{params, Connection};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -69,6 +69,10 @@ pub fn update_project(
     cs_task_id: Option<String>,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if active {
+        return Err("flow.verify_required".into());
+    }
     conn.execute(
         "UPDATE projects SET name=?1, root_path=?2, herdr_workspace=?3, cs_task_id=?4 WHERE id=?5",
         params![name, root_path, herdr_workspace, cs_task_id, id],
@@ -84,6 +88,10 @@ pub fn delete_project(
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
+    if active {
+        return Err("flow.verify_required".into());
+    }
     let pending: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM dispatch_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
     if pending {
         return Err("dispatch.verify_required".into());
@@ -106,43 +114,10 @@ pub fn delete_project(
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
 
-fn row_to_task(row: &rusqlite::Row) -> rusqlite::Result<Task> {
-    let status_str: String = row.get(3)?;
-    Ok(Task {
-        id: row.get(0)?,
-        project_id: row.get(1)?,
-        name: row.get(2)?,
-        status: TaskStatus::from_str(&status_str),
-        prompt_json: row.get(4)?,
-        prompt_snapshot: row.get(5)?,
-        dispatched_at: row.get(6)?,
-        dispatched_to: row.get(7)?,
-        created_at: row.get(8)?,
-        updated_at: row.get(9)?,
-        binding: None,
-    })
-}
-
 #[tauri::command]
 pub fn list_tasks(state: State<DbState>, project_id: String) -> Result<Vec<Task>, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare(
-            "SELECT id,project_id,name,status,prompt_json,prompt_snapshot,
-                    dispatched_at,dispatched_to,created_at,updated_at
-             FROM tasks WHERE project_id=?1 ORDER BY created_at",
-        )
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map(params![project_id], row_to_task)
-        .map_err(|e| e.to_string())?;
-    let mut tasks = rows
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    for task in &mut tasks {
-        task.binding = Some(crate::workflow::binding(&conn, &task.id)?);
-    }
-    Ok(tasks)
+    crate::tasks::list(&conn, &project_id)
 }
 
 #[tauri::command]
@@ -150,37 +125,10 @@ pub fn create_task(
     state: State<DbState>,
     project_id: String,
     name: String,
+    priority: TaskPriority,
 ) -> Result<Task, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
-    let task = Task {
-        id: Uuid::new_v4().to_string(),
-        project_id,
-        name,
-        status: TaskStatus::Todo,
-        prompt_json: "{}".into(),
-        prompt_snapshot: None,
-        dispatched_at: None,
-        dispatched_to: None,
-        created_at: now.clone(),
-        updated_at: now.clone(),
-        binding: None,
-    };
-    conn.execute(
-        "INSERT INTO tasks (id,project_id,name,status,prompt_json,created_at,updated_at)
-         VALUES (?1,?2,?3,?4,?5,?6,?7)",
-        params![
-            task.id,
-            task.project_id,
-            task.name,
-            task.status.as_str(),
-            task.prompt_json,
-            task.created_at,
-            task.updated_at
-        ],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(task)
+    crate::tasks::create(&conn, &project_id, &name, priority)
 }
 
 #[tauri::command]
@@ -189,25 +137,31 @@ pub fn update_task(
     id: String,
     name: String,
     prompt_json: String,
+    priority: TaskPriority,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let now = Utc::now().to_rfc3339();
-    conn.execute(
-        "UPDATE tasks SET name=?1, prompt_json=?2, updated_at=?3 WHERE id=?4",
-        params![name, prompt_json, now, id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
+    crate::tasks::update(&conn, &id, &name, &prompt_json, priority)
 }
 
 #[tauri::command]
-pub fn update_task_status(
-    state: State<DbState>,
-    terminals: State<Arc<crate::terminal::TerminalManager>>,
+pub async fn update_task_status(
+    state: State<'_, DbState>,
+    app: State<'_, Arc<crate::workflow::Workflow>>,
+    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
     id: String,
     status: String,
-) -> Result<(), String> {
+) -> Result<crate::lifecycle::Outcome, String> {
+    if status == "done" {
+        let app = app.inner().clone();
+        terminals.close_task(&id);
+        return tauri::async_runtime::spawn_blocking(move || {
+            app.complete_task(&id, &Uuid::new_v4().to_string())
+        })
+        .await
+        .map_err(|e| e.to_string())?;
+    }
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::lifecycle::ensure_idle(&conn, &id, None)?;
     if !matches!(status.as_str(), "todo" | "done") {
         return Err("dispatch.required".into());
     }
@@ -222,6 +176,19 @@ pub fn update_task_status(
     .map_err(|e| e.to_string())?;
     drop(conn);
     terminals.close_task(&id);
+    Ok(crate::lifecycle::Outcome::default())
+}
+
+#[tauri::command]
+pub fn archive_task(
+    state: State<DbState>,
+    terminals: State<Arc<crate::terminal::TerminalManager>>,
+    id: String,
+) -> Result<(), String> {
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::tasks::archive(&mut conn, &id)?;
+    drop(conn);
+    terminals.close_task(&id);
     Ok(())
 }
 
@@ -232,6 +199,7 @@ pub fn delete_task(
     id: String,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::lifecycle::ensure_idle(&conn, &id, None)?;
     if crate::workflow::binding(&conn, &id)?.operation.is_some() {
         return Err("dispatch.verify_required".into());
     }

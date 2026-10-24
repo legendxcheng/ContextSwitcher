@@ -60,7 +60,7 @@ body {
 
 /* ── Sidebar ───────────────────────────────────────────────────────────────── */
 .sidebar {
-  width: 248px;
+  width: 200px;
   flex-shrink: 0;
   border-right: 1px solid var(--border);
   background: var(--n0);
@@ -99,7 +99,7 @@ body {
   gap: 3px;
 }
 
-.project-actions { display: flex; gap: 2px; opacity: 0; transition: opacity 140ms; }
+.project-actions { display: flex; flex-direction: column; gap: 2px; opacity: 0; transition: opacity 140ms; }
 .project-item:hover .project-actions { opacity: 1; }
 
 /* ── Board area ─────────────────────────────────────────────────────────────── */
@@ -119,7 +119,9 @@ body {
 }
 
 /* ── Kanban board ───────────────────────────────────────────────────────────── */
-.kanban-board { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 32px 24px; overflow: hidden; }
+.kanban-board { flex: 1; min-height: 0; display: flex; overflow: hidden; }
+.board-main { flex: 1; min-width: 0; display: flex; flex-direction: column; overflow: hidden; container-type: inline-size; }
+.board-content { flex: 1; min-height: 0; display: flex; flex-direction: column; padding: 0 24px 24px; overflow: hidden; }
 
 .kanban-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(240px, 1fr)); gap: 16px; overflow-x: auto; padding: 2px 2px 8px; }
 
@@ -172,10 +174,6 @@ body {
 .col-empty-icon { display: grid; place-items: center; width: 44px; height: 44px; border: 1px solid var(--border); border-radius: 10px; color: var(--n6); margin-bottom: 4px; background: linear-gradient(145deg, var(--n3), transparent); }
 .col-empty-text { font-size: 14px; color: var(--n8); }
 
-.col-add { padding: 10px; border-top: 1px solid var(--border); display: flex; gap: 6px; flex-shrink: 0; }
-.new-task-input { flex: 1; width: 0; min-width: 0; padding: 7px 9px; font-size: 14px; background: var(--n0); border: 1px solid var(--n5); border-radius: var(--radius-sm); color: var(--text); outline: none; }
-.new-task-input:focus { border-color: var(--accent); }
-.new-task-input::placeholder { color: var(--text-muted); }
 
 /* ── Drag wrapper ───────────────────────────────────────────────────────────── */
 .card-wrapper { cursor: grab; }
@@ -183,13 +181,25 @@ body {
 .card-wrapper.dragging { opacity: 0.35; }
 
 /* ── Task cards ─────────────────────────────────────────────────────────────── */
-.task-card { background: var(--surface); border: 1px solid #353535; border-radius: var(--radius-sm); padding: 14px 12px 10px; box-shadow: 0 2px 3px #0001; transition: border-color 140ms, background 140ms; }
+.task-card { background: var(--surface); border: 1px solid #353535; border-radius: var(--radius-sm); padding: 8px 10px; min-height: 80px; box-shadow: 0 2px 3px #0001; transition: border-color 140ms, background 140ms; }
 .task-card:hover { border-color: #5a5a5a; background: #202020; }
 .task-card.status-in_progress { border-color: #e5b56730; }
 .task-card.status-done { border-color: #3ecf8e25; }
 
-.task-header { display: flex; align-items: flex-start; justify-content: space-between; gap: 8px; margin-bottom: 15px; }
-.task-name { font-size: 16px; font-weight: 500; line-height: 1.5; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; overflow: hidden; }
+.task-heading { display: flex; align-items: flex-start; gap: 4px; margin-bottom: 6px; }
+.task-header { flex: 1; min-width: 0; padding-top: 2px; }
+.task-name { font-size: 16px; font-weight: 500; line-height: 22px; overflow-wrap: anywhere; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
+.task-footer { display: flex; align-items: center; justify-content: space-between; gap: 4px; }
+.task-priority { flex-shrink: 0; font-size: 12px; line-height: 20px; padding: 0 5px; border-radius: 4px; border: 1px solid transparent; }
+.priority-normal { color: var(--text-muted); background: var(--n4); }
+.priority-high { color: var(--warning); background: #e5b56712; border-color: #e5b56733; }
+.priority-urgent { color: #ff9494; background: #e85d5d12; border-color: #e85d5d44; }
+.task-tools, .task-card .task-actions, .task-recovery { display: flex; align-items: center; gap: 2px; min-width: 0; padding: 0; margin: 0; border: 0; }
+.task-tools { flex-shrink: 0; }
+.task-card .btn-icon { width: 28px; min-height: 28px; height: 28px; padding: 5px; }
+.task-card button:disabled { opacity: 0.45; cursor: not-allowed; }
+.task-recovery { margin-top: 6px; flex-wrap: wrap; }
+.task-notice { margin: 6px 0 0; font-size: 12px; overflow-wrap: anywhere; }
 .task-status-badge { font-size: 12px; padding: 1px 5px; border-radius: 4px; white-space: nowrap; flex-shrink: 0; border: 1px solid #ffffff0a; margin-top: 2px; }
 .badge-todo        { background: var(--n4); color: var(--text-muted); }
 .badge-in_progress { background: #e5b5670c; color: var(--warning); }
@@ -199,6 +209,7 @@ body {
 .task-meta code { color: var(--n8); font-size: 14px; }
 
 .task-actions { display: flex; align-items: center; gap: 4px; flex-wrap: wrap; padding-top: 9px; border-top: 1px solid var(--border); }
+.task-card .task-actions { flex-wrap: nowrap; }
 
 /* ── Buttons ─────────────────────────────────────────────────────────────────── */
 button { display: inline-flex; align-items: center; justify-content: center; gap: 7px; min-height: 34px; padding: 6px 12px; border: 1px solid transparent; border-radius: var(--radius-sm); font: inherit; font-size: 14px; font-weight: 500; background: var(--surface-2); color: var(--text); cursor: pointer; transition: background 140ms, border-color 140ms, color 140ms, box-shadow 140ms; }
@@ -541,7 +552,7 @@ input, select { min-width: 0; }
 * { scrollbar-width: thin; scrollbar-color: var(--n5) transparent; }
 button:disabled { opacity: 0.45; cursor: not-allowed; }
 kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; border-radius: 3px; padding: 0 4px; line-height: 16px; opacity: 0.6; margin-left: 6px; }
-.sidebar-brand { display: flex; align-items: center; gap: 10px; min-height: 65px; padding: 0 22px; font-size: 23px; font-weight: 650; letter-spacing: -0.8px; }
+.sidebar-brand { display: flex; align-items: center; gap: 8px; min-height: 65px; padding: 0 14px; font-size: 20px; font-weight: 650; letter-spacing: -0.8px; white-space: nowrap; }
 .brand-mark { display: grid; place-items: center; color: var(--accent); }
 .brand-subtitle { font-size: 14px; font-weight: 400; color: var(--text-muted); letter-spacing: 0; }
 .sidebar-intro { color: var(--text-muted); font-size: 14px; padding: 4px 22px 18px; }
@@ -551,7 +562,7 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .project-actions .btn-icon { width: 24px; min-height: 28px; padding: 3px; }
 .project-item:focus-within .project-actions { opacity: 1; }
 .sidebar-create { margin: 14px 14px 24px; font-size: 14px; border-color: var(--border); background: transparent; flex-shrink: 0; }
-.sidebar-footer { margin-top: auto; padding: 19px 20px; display: flex; gap: 12px; align-items: center; color: var(--text-muted); border-top: 1px solid var(--border); }
+.sidebar-footer { margin-top: auto; padding: 19px 14px; display: flex; gap: 8px; align-items: center; color: var(--text-muted); border-top: 1px solid var(--border); }
 .sidebar-footer div { display: flex; flex-direction: column; gap: 2px; }
 .sidebar-footer strong { font-size: 14px; font-weight: 400; color: var(--n8); }
 .sidebar-footer span { font-size: 14px; }
@@ -573,8 +584,8 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .col-in_progress .col-title svg { color: var(--warning); }
 .col-done .col-title svg { color: var(--accent); }
 .col-empty-hint { font-size: 14px; }
-.col-add .btn-primary { padding: 6px 8px; }
 .task-actions button { font-size: 14px; padding: 4px 7px; min-height: 32px; }
+.task-card .task-actions button { font-size: 12px; padding: 3px 6px; min-height: 28px; white-space: nowrap; }
 .task-actions .btn-primary, .task-actions .btn-success { background: var(--accent-dim); border-color: #3ecf8e30; color: var(--accent); box-shadow: none; }
 .task-actions .btn-primary:hover, .task-actions .btn-success:hover { background: #3ecf8e22; border-color: #3ecf8e70; }
 .task-actions .btn-danger { margin-left: auto; }
@@ -598,10 +609,11 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 
 /* Keep cards usable at the desktop app's 900 x 600 minimum size. */
 @media (max-width: 1100px) {
-  .sidebar { width: 216px; }
-  .sidebar-brand { padding: 0 18px; }
+  .sidebar { width: 180px; }
+  .sidebar-brand { padding: 0 14px; }
+  .brand-subtitle { display: none; }
   .workspace-bar { padding: 0 22px; }
-  .kanban-board { padding: 0 20px 16px; }
+  .board-content { padding: 0 20px 16px; }
   .kanban-columns { gap: 12px; }
   .agent-bar-hint { display: none; }
 }
@@ -616,7 +628,7 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
   .sidebar-header { padding-top: 14px; }
   .project-actions { flex-direction: column; }
   .workspace-bar { gap: 10px; padding: 0 16px; }
-  .kanban-board { padding-right: 14px; padding-left: 14px; }
+  .board-content { padding-right: 14px; padding-left: 14px; }
   .board-toolbar { flex-wrap: wrap; gap: 10px; }
 }
 @media (hover: none) { .project-actions { opacity: 1; } }
@@ -625,14 +637,16 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 }
 
 /* Task terminal workspace */
-.board-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; gap: 4px; }
-.board-workspace .kanban-columns { min-width: 0; grid-template-columns: repeat(3, minmax(200px, 1fr)); gap: 10px; }
-.terminal-panel { width: var(--terminal-width, 300px); flex-shrink: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #111; border: 1px solid var(--border); border-radius: var(--radius); }
-.terminal-header { display: flex; flex-direction: column; gap: 6px; padding: 12px; border-bottom: 1px solid var(--border); }
+.board-workspace { display: flex; flex: 1; min-height: 0; min-width: 0; }
+.board-workspace .board-content { padding-inline: 12px; }
+.board-workspace .kanban-columns { min-width: 0; grid-template-columns: repeat(3, minmax(180px, 1fr)); gap: 8px; }
+.terminal-panel { width: var(--terminal-width, calc(100vw / 3)); flex-shrink: 0; min-width: 0; display: flex; flex-direction: column; overflow: hidden; background: #1e1e2e; color: #cdd6f4; border-left: 1px solid #313244; }
+.terminal-header { display: flex; align-items: center; gap: 12px; min-height: 48px; padding: 10px 12px; background: #181825; border-bottom: 1px solid #313244; }
 .terminal-header strong { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.terminal-header [role=status] { color: var(--text-muted); font-size: 12px; }
-.terminal-host { flex: 1; min-height: 0; min-width: 0; padding: 8px; overflow: hidden; }
-.terminal-hint, .terminal-feedback { padding: 12px; color: var(--text-muted); font-size: 14px; overflow-wrap: anywhere; }
+.terminal-header [role=status] { margin-left: auto; flex-shrink: 0; color: #a6adc8; font-size: 12px; }
+/* Match WezTerm window_padding; keep the host and xterm background seamless. */
+.terminal-host { flex: 1; min-height: 0; min-width: 0; padding: 4px 6px; overflow: hidden; }
+.terminal-hint, .terminal-feedback { padding: 12px; color: #a6adc8; font-size: 14px; overflow-wrap: anywhere; }
 .terminal-feedback { max-height: 45%; overflow-y: auto; }
 .task-card.selected { border-color: var(--accent); outline: 1px solid var(--accent); }
 .task-header[role=button] { cursor: pointer; }
@@ -642,3 +656,16 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .terminal-splitter:hover, .terminal-splitter:focus-visible { background: var(--accent-dim); outline: 1px solid var(--accent); }
 .terminal-host > .xterm { height: 100%; }
 .dialog textarea { display: block; width: 100%; min-height: 80px; margin-top: 8px; }
+
+/* Respond to the resizable board, not just the window width. */
+@container (max-width: 700px) {
+  .board-summary, .agent-bar-hint { display: none; }
+  .workspace-bar { padding-inline: 16px; gap: 10px; }
+  .board-content { padding-inline: 14px; }
+  .board-toolbar { gap: 8px; }
+  .board-toolbar-actions { gap: 8px; }
+}
+@container (max-width: 440px) {
+  .board-meta { display: none; }
+  .board-toolbar kbd { display: none; }
+}

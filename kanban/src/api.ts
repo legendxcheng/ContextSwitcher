@@ -1,6 +1,6 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
-  Project, Task, FileEntry, SkillEntry, HerdrAgent, DispatchRecord, CsTask,
+  Project, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord, CsTask,
 } from "./types";
 
 // Projects
@@ -15,13 +15,21 @@ export const deleteProject = (id: string) => invoke<void>("delete_project", { id
 
 // Tasks
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
-export const createTask = (projectId: string, name: string) =>
-  invoke<Task>("create_task", { projectId, name });
-export const updateTask = (id: string, name: string, promptJson: string) =>
-  invoke<void>("update_task", { id, name, promptJson });
+export const createTask = (projectId: string, name: string, priority: TaskPriority) =>
+  invoke<Task>("create_task", { projectId, name, priority });
+export const updateTask = (id: string, name: string, promptJson: string, priority: TaskPriority) =>
+  invoke<void>("update_task", { id, name, promptJson, priority });
 export const updateTaskStatus = (id: string, status: string) =>
-  invoke<void>("update_task_status", { id, status });
+  status === "done" ? completeTask(id, crypto.randomUUID()) : invoke<FlowOutcome>("update_task_status", { id, status });
+export interface FlowOutcome { warning?: string | null }
+export const startTask = (taskId: string, promptText: string, operationId: string) =>
+  invoke<FlowOutcome>("start_task", { taskId, promptText, operationId });
+export const completeTask = (taskId: string, operationId: string) =>
+  invoke<FlowOutcome>("complete_task", { taskId, operationId });
+export const recoverLifecycle = (taskId: string, operationId: string) =>
+  invoke<void>("recover_lifecycle", { taskId, operationId });
 export const deleteTask = (id: string) => invoke<void>("delete_task", { id });
+export const archiveTask = (id: string) => invoke<void>("archive_task", { id });
 
 // Discovery
 export const searchFiles = (rootPath: string, query: string) =>

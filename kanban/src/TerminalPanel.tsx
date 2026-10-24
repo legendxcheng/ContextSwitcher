@@ -5,6 +5,8 @@ import "@xterm/xterm/css/xterm.css";
 import * as api from "./api";
 import type { Task } from "./types";
 import { tr, errorText } from "./i18n";
+import { terminalAppearance } from "./terminalAppearance";
+import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
 
 export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?: () => void }) {
   const host = useRef<HTMLDivElement>(null);
@@ -24,12 +26,25 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
     let pendingInput = "";
     let writing = false;
     let inputTimer: ReturnType<typeof setTimeout> | undefined;
-    const terminal = new Terminal({ cursorBlink: true, scrollback: 3000, fontSize: 13,
-      fontFamily: "Cascadia Mono, Consolas, monospace", convertEol: false,
-      theme: { background: "#111111", foreground: "#e5e5e5", cursor: "#3ecf8e" } });
+    const terminal = new Terminal({ ...terminalAppearance, fontSize: readTerminalFontSize(), scrollback: 3000, convertEol: false });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host.current);
+    terminal.attachCustomKeyEventHandler((event) => {
+      const delta = terminalFontSizeDelta(event);
+      if (!delta) return true;
+      // Consume every phase, but adjust only on keydown (including key repeat).
+      event.preventDefault();
+      event.stopPropagation();
+      if (active && event.type === "keydown") {
+        const size = changeTerminalFontSize(terminal.options.fontSize!, delta);
+        if (size !== terminal.options.fontSize) {
+          terminal.options.fontSize = size;
+          fit.fit();
+        }
+      }
+      return false;
+    });
     fit.fit();
     terminal.options.disableStdin = true;
     setState("terminal.connecting");

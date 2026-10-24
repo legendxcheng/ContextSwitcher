@@ -43,7 +43,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
   }, [project.herdr_workspace, refresh]);
 
   function buildPreview() {
-    // Extract plain text from Tiptap JSON, expanding mention nodes with content
+    // Preview file placeholders and native skill invocations.
     try {
       const doc = JSON.parse(task.prompt_json);
       const text = extractTextWithMentions(doc);
@@ -59,7 +59,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
     setError("");
     setLoading(true);
     try {
-      // Build the resolved prompt: expand mentions into file/skill content
+      // Expand files, retaining skill names for the target agent to resolve.
       const doc = JSON.parse(task.prompt_json);
       const resolved = await resolveMentions(doc, project.root_path);
       await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current);
@@ -88,7 +88,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
           ) : agents.length === 0 ? (
             <p className="hint">未找到 Agent。确认 Herdr 正在运行且 workspace 内有 agent。</p>
           ) : (
-            <select value={selected} onChange={(e) => setSelected(e.target.value)} disabled={loading || !!boundPane}>
+            <select aria-label={tr("binding.agent")} value={selected} onChange={(e) => setSelected(e.target.value)} disabled={loading || !!boundPane}>
               <option value="">-- 选择 --</option>
               {agents.map((a) => (
                 <option key={a.pane_id} value={a.pane_id} disabled={isOccupied(a)}>
@@ -127,7 +127,9 @@ function extractTextWithMentions(doc: any): string {
     if (node.type === "text") {
       text += node.text;
     } else if (node.type === "mention") {
-      text += `\n[${node.attrs.kind === "file" ? "@文件" : "$技能"}: ${node.attrs.label}]\n`;
+      text += node.attrs.kind === "file"
+        ? `\n[@文件: ${node.attrs.label}]\n`
+        : `$${node.attrs.label}`;
     } else if (node.content) {
       node.content.forEach(walk);
     }

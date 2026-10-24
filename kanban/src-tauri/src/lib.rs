@@ -1,7 +1,9 @@
 mod commands;
 mod db;
 mod herdr;
+mod lifecycle;
 mod models;
+mod tasks;
 mod terminal;
 mod work_commands;
 mod workflow;
@@ -49,11 +51,15 @@ pub fn run() {
             commands::update_task,
             commands::update_task_status,
             commands::delete_task,
+            commands::archive_task,
             commands::search_files,
             commands::search_skills,
             commands::read_file_content,
             commands::read_skill_content,
             work_commands::herdr_list_agents,
+            work_commands::start_task,
+            work_commands::complete_task,
+            work_commands::recover_lifecycle,
             work_commands::dispatch_to_herdr,
             work_commands::resolve_dispatch,
             work_commands::repair_binding,

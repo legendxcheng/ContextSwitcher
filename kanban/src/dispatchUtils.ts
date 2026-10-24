@@ -1,6 +1,6 @@
 import * as api from "./api";
 
-/** Walk the Tiptap doc, replacing mention nodes with expanded content. */
+/** Expand file references, preserving native $skill invocations. */
 export async function resolveMentions(doc: any, _rootPath: string): Promise<string> {
   const parts: string[] = [];
   async function walk(node: any) {
@@ -15,8 +15,7 @@ export async function resolveMentions(doc: any, _rootPath: string): Promise<stri
           const content = await api.readFileContent(ref);
           parts.push(`\n--- @文件: ${label} (${ref}) ---\n\`\`\`\n${content}\n\`\`\`\n`);
         } else {
-          const content = await api.readSkillContent(ref);
-          parts.push(`\n--- $技能: ${label} ---\n${content}\n---\n`);
+          parts.push(`$${label}`);
         }
       } catch (e) {
         parts.push(`\n[引用失败: ${label} — ${String(e)}]\n`);

@@ -1,12 +1,12 @@
 # Kanban 代码结构与关键流程分析
 
-更新日期：2026-10-24。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-24（补充紧凑卡片、顶部新建表单、优先级排序与完成归档；保留自动流转与终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 ## 1. 项目定位与架构边界
 
 Kanban 是同一仓库中的独立桌面应用，使用 React + TypeScript 构建界面，以 Tauri/Rust 提供 SQLite、文件系统、原生目录选择和 Herdr CLI 调用能力。它不是 Python/PySide6 主程序中的一个页面，也没有直接调用主程序的 TaskManager 或 WindowManager。
 
-业务中心是“为本地项目维护任务卡片，编辑带文件/技能引用的提示词，再发送给已有 Herdr Agent”。当前已形成项目管理、三列看板、提示词编辑、引用搜索和派发的基本闭环。
+业务中心是“为本地项目维护任务卡片，编辑带文件/技能引用的提示词，自动分配或手动选择 Herdr Agent，并保存可恢复的 Codex 会话”。当前已形成项目管理、三列看板、提示词编辑、引用搜索和派发的基本闭环。
 
 必须区分三个概念：
 
@@ -35,7 +35,7 @@ flowchart LR
     CMD --> PICK[rfd 原生目录选择器]
 ```
 
-没有业务 HTTP 服务、后台任务调度器或 Agent 完成回调。CRUD 通过 `invoke → Promise` 请求/响应传递；终端输出通过 Tauri Channel 流式传递。Herdr 继续拥有底层 Agent 进程，看板只管理其查看连接。
+没有业务 HTTP 服务、后台任务调度器或 Agent 完成回调。CRUD 通过 `invoke → Promise` 请求/响应传递；终端输出通过 Tauri Channel 流式传递。Herdr 继续拥有底层 Agent 进程；看板管理查看连接，并通过任务流转命令创建、准备及关闭任务 pane。
 
 ## 2. 目录与入口
 
@@ -55,13 +55,17 @@ kanban/
 │  ├─ ProjectSidebar.tsx           项目列表和管理入口
 │  ├─ ProjectFormDialog.tsx        项目表单、目录选择、CS 任务关联
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
-│  ├─ TaskCard.tsx                 卡片展示、派发/完成/删除入口
-│  ├─ TaskEditPanel.tsx            名称和提示词编辑侧栏
+│  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
+│  ├─ TaskCreateDialog.tsx         顶部按钮与 N 打开的名称/优先级创建表单
+│  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
+│  ├─ TaskEditPanel.tsx            名称、优先级和提示词编辑侧栏
 │  ├─ PromptEditor.tsx             Tiptap 初始化与 JSON 输出
 │  ├─ MentionNode.ts              自定义原子行内 mention 节点
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
 │  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次
+│  ├─ terminalAppearance.ts        本机 WezTerm 外观预设：字体、光标、ANSI 色板
+│  ├─ terminalFontSize.ts           字号快捷键识别、上下限及本机偏好保存
 │  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
 │  ├─ DispatchRecovery.tsx         核实不确定的派发结果
 │  ├─ i18n.ts / locales/           新增界面的稳定翻译键
@@ -77,8 +81,10 @@ kanban/
 │     ├─ lib.rs                    初始化数据库、插件与命令注册
 │     ├─ db.rs                     数据路径、建表、轻量迁移
 │     ├─ models.rs                 Rust 模型及状态转换
-│     ├─ commands.rs               CRUD、文件/技能和 CS 数据读取
+│     ├─ commands.rs               CRUD/归档 IPC、文件/技能和 CS 数据读取
+│     ├─ tasks.rs                  任务存储、优先级排序、归档事务及活跃任务守卫
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
+│     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
 │     ├─ workflow.rs               任务绑定、派发操作及恢复事务
 │     ├─ herdr.rs                  有界 CLI 调用、目标身份核验
 │     └─ terminal.rs               Herdr JSONL 控制流、输入与安全释放
@@ -89,11 +95,11 @@ kanban/
 ### 2.1 桌面启动顺序
 
 1. [main.rs](kanban/src-tauri/src/main.rs) 调用 `kanban_lib::run()`；release 模式设置 Windows GUI subsystem。
-2. [lib.rs](kanban/src-tauri/src/lib.rs) 创建数据目录，持有数据库实例锁，再打开 SQLite、执行迁移，将上次中断的 pending 派发标为 unknown。
+2. [lib.rs](kanban/src-tauri/src/lib.rs) 创建数据目录，持有数据库实例锁，再打开 SQLite、执行迁移，将上次中断的 pending 派发及生命周期操作标为 unknown。
 3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
 4. 注册插件、业务命令、Workflow 和 TerminalManager，再启动 Tauri 窗口；销毁窗口时释放本应用终端连接。
 5. [main.tsx](kanban/src/main.tsx) 挂载 `App`；`App` 加载项目，自动选择列表中的第一个有效项目。
-6. `KanbanBoard` 按项目 ID 加载卡片，按 workspace 名称查询 Agent。
+6. `KanbanBoard` 按项目 ID 加载卡片，按 workspace 名称查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
 
 数据库初始化发生在窗口启动前。创建目录、连接和建表失败使用 `expect` 终止，没有恢复界面。数据库命令通过一把 Mutex 串行访问同一连接。
 
@@ -104,6 +110,21 @@ kanban/
 `tauri.conf.json` 配置窗口为 1280×800，最小 900×600，标题为 Herdr Kanban。`dragDropEnabled: false` 配合当前 HTML 拖放实现，不能误当成“应用不支持拖拽”。Vite 固定端口 1420，设置 `TAURI_DEV_HOST` 时另用 1421 提供 HMR。
 
 虽然保留 Tauri 模板的 mobile 入口属性，CS 数据路径依赖 `APPDATA`，外部执行依赖本机 `herdr`；现阶段应按 Windows 桌面工作流理解，不能据此宣称跨平台验收完成。
+
+### 2.3 应用图标
+
+2026-10-24 替换 Tauri 默认应用图标。唯一设计源稿为 [public/app-icon.svg](kanban/public/app-icon.svg)：炭灰圆角底、翡翠绿三列任务卡片，以错落排列形成抽象 H；透明外角，不含文字或外部字体。`index.html` 的 favicon 和 `ProjectSidebar.tsx` 的 32px 品牌图标均引用 `/app-icon.svg`，网页标题为 `Herdr Kanban`。
+
+`src-tauri/icons/` 保存从该 SVG 导出的桌面 PNG、Windows ICO、macOS ICNS 和 Windows 商店图标；`tauri.conf.json` 原有 `bundle.icon` 路径继续生效，`bundle.windows.nsis` 的 `installerIcon` 和 `uninstallerIcon` 显式指定同一份 `icons/icon.ico`，替换 NSIS 自带图标。ICO 包含 16、24、32、48、64、256px。业务操作的线性图标仍由 `Icon.tsx` 提供。
+
+在 `kanban/` 下重新导出时，先生成到临时目录，再只复制顶层桌面资源，避免引入未使用的 Android/iOS 资源：
+
+```powershell
+.\node_modules\.bin\tauri.cmd icon public/app-icon.svg --output ../.scratch/kanban-brand-icons
+Get-ChildItem -LiteralPath ../.scratch/kanban-brand-icons -File | Copy-Item -Destination src-tauri/icons
+```
+
+本次验证：16–128px 深浅背景目视检查、透明通道与 ICO/ICNS 尺寸检查通过；前端构建和 28 项现有测试通过。Windows debug 可执行文件及 NSIS 安装包构建通过，从应用及安装器可执行文件提取的图标均已确认为新设计。因默认 `target/debug/kanban.exe` 正在运行而被占用，构建使用 `--target-dir E:/ContextSwitcher/.scratch/kanban-icon-build`，没有停止当前应用或安装新包。尚未验收新进程的实际任务栏显示、安装后快捷方式缓存及 macOS 显示；前端构建仍有既有大 chunk 提示。
 
 ## 3. 前端组件与状态归属
 
@@ -127,9 +148,9 @@ flowchart TD
 | [App.tsx](kanban/src/App.tsx) | `projects`、`selectedId`；从列表派生当前项目 | `listProjects`；把刷新函数下传侧栏 |
 | [ProjectSidebar.tsx](kanban/src/ProjectSidebar.tsx) | 新建弹窗开关、编辑目标 | 删除前确认；完成 CRUD 后通知 App 重载 |
 | [ProjectFormDialog.tsx](kanban/src/ProjectFormDialog.tsx) | 名称、根目录、workspace、CS task ID、保存状态和错误 | 创建/更新项目、选择目录、读取 CS 任务 |
-| [KanbanBoard.tsx](kanban/src/KanbanBoard.tsx) | 卡片列表、加载、新建输入、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
-| [TaskCard.tsx](kanban/src/TaskCard.tsx) | 展示卡片名称、状态和最近派发信息 | 编辑/派发回调；直接调用完成和删除 API |
-| [TaskEditPanel.tsx](kanban/src/TaskEditPanel.tsx) | 名称与提示词草稿、saving | 显式保存；取消、遮罩、Esc 直接关闭 |
+| [KanbanBoard.tsx](kanban/src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
+| [TaskCard.tsx](kanban/src/TaskCard.tsx) | 展示名称、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
+| [TaskEditPanel.tsx](kanban/src/TaskEditPanel.tsx) | 名称、优先级与提示词草稿、saving | 显式保存；取消、遮罩、Esc 直接关闭 |
 | [PromptEditor.tsx](kanban/src/PromptEditor.tsx) | Tiptap Editor 实例 | 接收 JSON 字符串；每次编辑输出序列化 JSON |
 | [MentionPopover.tsx](kanban/src/MentionPopover.tsx) | 搜索词、引用种类、候选项、选择下标、展开状态 | 查询文件/技能；写入编辑器 transaction |
 | [DispatchDialog.tsx](kanban/src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
@@ -141,9 +162,9 @@ flowchart TD
 
 ### 3.1 样式与交互实现
 
-[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 248px，窄窗口收为 216px。左侧三列 grid 等宽、每列至少 200px；右侧终端默认 300px，最小 280px，分隔线支持拖动和方向键。空间不足时仅三列区域横向滚动；编辑侧栏宽 520px，保留 `max-width` 限制。动画包括侧栏滑入、遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
+[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 200px，1100px 及以下窗口收为 180px，品牌、底部留白和纵向项目操作按钮适应窄侧栏。左侧三列 grid 等宽、每列至少 180px、间距 8px，看板内容左右留白 12px。右侧终端从窗口内容区顶部贯通到底部，默认占整个应用内容宽度的 1/3，侧栏、看板及分隔线合计占 2/3。首次测量前通过 CSS viewport 宽度保留相同比例；ResizeObserver 在未手调时持续维护默认比例。分隔线支持拖动和方向键，手调后保持像素宽度并随窗口缩小约束上限；最小终端 280px，左侧看板至少 320px。切项目重置默认宽度，不跨重启保存。项目面包屑、目录、任务工具栏与 Agent 派发栏均位于左侧看板，终端标题和连接状态合并为单行。左侧根据自身宽度收起辅助文字。空间不足时仅三列区域横向滚动；编辑侧栏宽 520px，保留 `max-width` 限制。动画包括侧栏滑入、遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
 
-`App` 增加工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及聚焦底部输入框的新建按钮。Agent 派发区取消整体低透明度。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、编辑侧栏、派发对话框、引用候选与通知使用同一套主题。
+`App` 负责项目侧栏与主区域，`KanbanBoard` 在左侧渲染工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及打开创建表单的顶部新建按钮。Agent 派发区取消整体低透明度。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、编辑侧栏、派发对话框、引用候选与通知使用同一套主题。
 
 此前主题调整的浏览器模拟检查仅证明界面行为。本次补充了隔离 SQLite、真实 Tauri/WebView2 与 Windows Herdr 的终端输入和生命周期验收；见第 9 节及验收记录。
 
@@ -161,7 +182,7 @@ flowchart TD
 | --- | --- |
 | `id` | Rust 生成 UUID v4 字符串，主键 |
 | `name` | 项目展示名称 |
-| `root_path` | 文件搜索根目录；不是派发进程的工作目录 |
+| `root_path` | 文件搜索及自动启动/恢复的工作目录；手动派发不切换已有 Agent 目录 |
 | `herdr_workspace` | Agent 列表筛选文本，同时进入派发目标记录 |
 | `cs_task_id` | 可空的 CS 任务 ID，仅作为关联信息 |
 | `created_at` | UTC RFC3339 字符串；项目列表按其排序 |
@@ -177,7 +198,10 @@ flowchart TD
 | `prompt_json` | Tiptap 文档的 JSON 字符串；新卡默认 `"{}"` |
 | `prompt_snapshot` | 最近一次成功派发时实际发送的展开文本，可为空 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
-| `created_at`、`updated_at` | 创建及最后修改时间；任务列表按创建时间排序 |
+| `priority` | normal / high / urgent，显示一般 / 优先 / 紧急；默认 normal，SQL CHECK 与 IPC 枚举拒绝非法值 |
+| `archived_at` | 可空归档时间；非空任务不在看板列表和统计中出现，仍保留 done 状态及所有历史 |
+| `created_at`、`updated_at` | 创建及最后修改时间；列表按优先级降序、创建时间升序、ID 稳定排序 |
+| `cleanup_required` | 派生布尔值：最近一次 complete 操作 failed/unknown 时为 true；不受后续 start 失败覆盖 |
 
 新增数据表：
 
@@ -185,15 +209,17 @@ flowchart TD
 | --- | --- |
 | `task_bindings` | task_id 主键；`UNIQUE(session,pane_id)` 跨项目保障独占；保存完整目标身份和 valid/reserved 状态 |
 | `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
-| `schema_migrations` | 记录绑定与派发表的迁移版本，初始化可重复执行 |
+| `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
+| `lifecycle_operations` | 启动/完成操作 UUID、pending/unknown/succeeded/failed、目标、错误和核实依据；每任务最多一条未决记录 |
+| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 5；4 加优先级，5 加归档时间），初始化可重复执行 |
 
-Task 上的 `binding` 是列表返回的派生字段，不写入旧 tasks 表。没有结构化绑定的旧开发中任务返回 repair，旧共享目标不会自动认领。完成或移回未开发保留绑定；删除解除绑定，保留派发审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
+Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tasks 表。`flow` 包含保存的会话 ID、最近生命周期操作及错误。无活跃绑定但有会话记录时返回 dormant；没有会话记录的旧开发中任务返回 repair，旧共享目标不会自动认领。完成后成功关闭才解除 pane 绑定；缺会话 ID、身份变化或关闭失败时保留目标并提供重试关闭。移回未开发保留绑定；删除解除绑定，保留操作审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
 
 ### 4.3 数据路径、迁移与约束
 
 默认数据库为 `%APPDATA%\herdr-kanban\kanban.db`；隔离验收可设置 `KANBAN_DATA_DIR`。它与 Python 主应用的 tasks.json 独立。启动持有同目录数据库锁，避免第二实例把活跃派发误判为中断；进程退出自动释放锁。
 
-显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经派发确认。pending/unknown 操作阻止删除相关任务/项目和变更状态，以保留核实证据。
+显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经手动派发或自动启动/恢复工作流。pending/unknown 操作阻止相关任务的冲突操作与删除，并阻止项目删除及生命周期未决时的项目修改，以保留核实证据。关闭中断允许在重新核验原目标后重试。
 
 ## 5. IPC 命令契约
 
@@ -207,11 +233,15 @@ Task 上的 `binding` 是列表返回的派生字段，不写入旧 tasks 表。
 | `create_project` | name、rootPath、herdrWorkspace、csTaskId | 插入并返回 Project |
 | `update_project` | id + 项目字段 | 更新项目，返回空 |
 | `delete_project` | id | 删除项目；卡片清理由外键级联负责 |
-| `list_tasks` | projectId | 项目内 Task[]，按创建时间排序 |
-| `create_task` | projectId、name | 创建 todo 卡片并返回 Task |
-| `update_task` | id、name、promptJson | 更新正文及 updated_at |
-| `update_task_status` | id、status | 更新状态及 updated_at |
+| `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
+| `create_task` | projectId、name、priority | 创建 todo 卡片并返回 Task |
+| `update_task` | id、name、promptJson、priority | 更新名称、正文、优先级及 updated_at；拒绝归档任务 |
+| `update_task_status` | id、status | todo 直接更新；done 兼容入口转完整完成工作流；拒绝直接 in_progress |
+| `start_task` | taskId、promptText、operationId | 自动预占/创建 pane，启动或精确恢复 Codex；首次发送后才进入开发中 |
+| `complete_task` | taskId、operationId | 标记完成、保存会话、关闭 pane；返回可为空的 warning |
+| `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
 | `delete_task` | id | 删除卡片 |
+| `archive_task` | id | 仅 done 且无未决操作/清理时归档；事务释放独占绑定，保留历史，关闭本应用查看连接 |
 | `search_files` | rootPath、query | 最多 50 个 FileEntry |
 | `search_skills` | query | 最多 30 个 SkillEntry |
 | `read_file_content` | absPath | UTF-8 文件全文 |
@@ -246,15 +276,25 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 
 ### 6.2 创建、编辑和移动卡片
 
-1. Todo 列输入名称，`handleAddTask()` 调用 `create_task`。
+1. 顶部“新建任务”按钮或 N 打开 `TaskCreateDialog`；列底部没有新增输入区域。表单填写名称、选择优先级后调用 `create_task`。创建失败保留草稿，取消不创建；再次打开默认一般。
 2. Rust 插入默认 todo 卡片，前端重新加载并用新 ID 打开 `TaskEditPanel`。
 3. Tiptap 编辑内容经 `getJSON()` 序列化到面板草稿。
-4. 显式保存调用 `update_task`，成功后关闭侧栏、刷新看板。
-5. 卡片拖到“开发中”时打开 `DispatchDialog`，选择 Agent 并确认派发；确认前、取消或派发失败均保留原状态。派发成功后由 `dispatch_to_herdr` 更新状态和派发记录，前端重新查询后移动卡片。拖到“未开发”或“完成”时调用 `update_task_status`，成功后重新查询；拖到原列不执行更新。
+4. 显式保存调用 `update_task`，同时保存名称、优先级和提示词，成功后关闭侧栏、刷新看板。同列按优先级重排，保留有效的当前终端选择。
+5. 卡片拖到“开发中”时直接调用 `start_task`，自动分配窗口；首次执行展开已保存提示词并发送，已保存会话或保留原绑定的任务只恢复/连接、不重发。成功后重新查询并选中该任务。拖到“完成”及完成按钮统一走 `complete_task`，关闭失败也刷新完成状态并显示清理警告。拖到“未开发”调用 `update_task_status`；拖到原列不执行更新。任务流转期间禁用该卡片操作和拖拽，并用同步 Set 阻止重复请求。
 
-列之间允许迁移，包括 done 回 todo；从 todo 或 done 进入 in_progress 必须经过派发确认。同一列内部没有手动排序，也没有顺序持久化。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
+列之间允许迁移，包括 done 回 todo；从 todo 或 done 拖入 in_progress 自动启动或恢复，无派发确认弹窗。同一列不提供手动排序；统一由后端按紧急、优先、一般，再按创建时间和 ID 排序。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
 
-看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，聚焦新增输入框；输入框 Enter 新建，Escape 清空并失焦。全局快捷键排除 input、textarea、contenteditable 和右侧终端，终端键盘事件不冒泡至看板。
+看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，打开顶部创建表单；表单 Enter 提交，Escape 取消，提交中禁用重复操作与取消。全局快捷键排除 input、select、textarea、contenteditable、已有弹层和右侧终端，终端键盘事件不冒泡至看板。
+
+### 6.2.1 紧凑卡片与归档
+
+卡片标题最多两行，完整名称通过悬停查看；右上角为编辑笔图标，完成卡片旁有归档图标，删除为底部图标。去掉可见时间、重复状态标签与常驻派发目标，优先级文字标签的悬停提示展示目标。普通卡片实测 80～98 CSS px；错误与核实/清理恢复信息可增加高度。紧凑按钮样式仅作用于卡片，不改变终端恢复控件。
+
+`archive_task → tasks::archive` 在同一 SQLite 事务检查 done、未归档、无 pending/unknown 派发或生命周期操作、无未完成的 complete 清理，再写入归档时间、updated_at 并解除 task_bindings；成功后只释放本应用的终端查看连接，不调用 Herdr 关闭 pane、停止 Agent 或发送 prompt。重复归档幂等；事务失败保留卡片、绑定与证据。任务正文、priority、快照、会话及操作历史全部保留。
+
+最近一次 complete 的 failed/unknown 独立派生 `cleanup_required`；后续 start 失败不会掩盖它。前端使用该字段保留清理重试入口，后端重新核对后才允许归档。归档互斥复用生命周期守卫和派发事务；更新、状态改变、派发、开始/完成、修复绑定及终端目标解析均拒绝已归档任务，防止迟到请求重新激活。
+
+归档成功后看板先从本地列表移除该任务并清理相关选择/弹层，再刷新任务和 Agent 占用信息；即使列表刷新失败，卡片与统计也不会回退。归档失败保留卡片并显示错误，不额外弹确认框。本次没有归档列表、恢复归档或批量归档入口。
 
 ### 6.3 @ 文件与 $ 技能引用
 
@@ -290,7 +330,7 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 
 ### 6.4 派发到 Herdr
 
-存在三个入口：卡片“派发/再派发”按钮、把其他列的卡片拖到“开发中”，或把卡片拖到顶部 Agent chip。拖到“开发中”打开未预选目标的派发对话框；拖到 Agent chip 打开预选该目标的对话框。两种拖放均不会立即发送或提前修改任务状态。done 卡片没有派发按钮，但仍可拖到“开发中”或 Agent 重新派发。
+手动派发保留未开发卡片“派发”按钮和顶部 Agent chip 入口；卡片移除“再派发”和常驻“修复绑定”，终端异常修复入口保留，均经 `DispatchDialog` 确认。拖入“开发中”改为自动启动/恢复，详见 6.6。done 卡片拖入开发中恢复旧会话；显式拖到 Agent chip 仍属于用户手动派发行为。
 
 ```mermaid
 sequenceDiagram
@@ -316,21 +356,43 @@ sequenceDiagram
 
 派发和修复对话框可以刷新列表，其他任务占用目标显示为禁用；后端数据库约束仍是最终保障。再派发复用已有有效目标。顶部 Agent 栏在项目 workspace 变化时刷新，其拖放仍需进入对话框确认，不直接发送。
 
-**预览。** `buildPreview()` 调用本地 `extractTextWithMentions()`，只展示普通文本与 `[@文件: ...]`、`[$技能: ...]` 占位符，没有读取引用正文。2026-10-24 将按钮文案改为“预览提示词”，避免暗示已展开引用；解析行为保持不变。
+**预览。** `buildPreview()` 调用本地 `extractTextWithMentions()`，展示普通文本、`[@文件: ...]` 占位符与原样的 `$技能名`，不读取引用正文。技能的预览与实际发送一致；文件在实际派发时展开。
 
-**实际展开。** [resolveMentions()](kanban/src/dispatchUtils.ts) 递归处理文档：普通文字直接追加；文件正文放入带路径的分隔标题和代码块；技能正文直接附在技能标题后。段落和标题补换行；并非完整 Markdown 序列化，粗体、列表、hardBreak 等结构没有对应的完整格式恢复。
+**实际展开。** [resolveMentions()](kanban/src/dispatchUtils.ts) 递归处理文档：普通文字直接追加；文件正文放入带路径的分隔标题和代码块；技能引用只输出 `$技能名`，不读取或注入 SKILL.md 正文，由目标 Agent 解析技能调用。段落和标题补换行；并非完整 Markdown 序列化，粗体、列表、hardBreak 等结构没有对应的完整格式恢复。
 
-引用读取按文档顺序逐个 await，无缓存和去重。每次派发读取当时的文件内容，可能与编写提示词时不同。单个引用读取失败会替换为“引用失败”文本并继续发送；参数 `_rootPath` 当前未使用，读取路径不会重新限制在项目根目录内。
+引用读取按文档顺序逐个 await，无缓存和去重。仅文件引用会读取正文，每次派发读取当时的文件内容，可能与编写提示词时不同。单个引用读取失败会替换为“引用失败”文本并继续发送；参数 `_rootPath` 当前未使用，读取路径不会重新限制在项目根目录内。
 
-**执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒、stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。返回成功意味着 Herdr 控制接口确认了 prompt 请求且数据库提交成功，不代表 Agent 已完成业务。
+**执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒，Agent 启动外层超时 40 秒（Herdr 启动默认 30 秒），stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。Windows Codex 使用 `pane send-text` 发送正文，再核验目标身份，然后用 `agent send-keys right enter` 结束粘贴缓冲并提交；不叠加 `agent prompt` 的定时 Enter。其他平台/Agent 仍用 `agent prompt`。正文发送后任何错误都视为 unknown，不能自动重发。返回成功意味着 Herdr 控制接口确认了输入请求且数据库提交成功，不代表 Agent 已完成业务。
 
 ### 6.5 右侧终端与恢复
 
-点击开发中卡片先更新本地高亮和标题，TerminalPanel 创建唯一 connectionId，经 terminal_open 请求任务对应的目标。旧 effect 立即禁用输入、清理 xterm 和监听器、按旧 ID 释放连接；迟到输出不能写入新的 xterm。完成、移回 todo、删除及切项目也清理连接。
+终端外观由 `terminalAppearance.ts` 集中配置，采用 2026-10-24 本机 WezTerm 配置快照：Catppuccin Mocha 完整 16 色 ANSI 色板、背景 `#1e1e2e`、前景 `#cdd6f4`，字体依次为 Cascadia Code / Noto Sans SC / Microsoft YaHei / monospace；13pt 换算为约 17.33 CSS px，行高 1.05，常亮竖线光标。面板标题、边框和内边距在 `App.css` 对齐主题。这是静态外观预设，不会自动读取或同步后续 Lua 配置；字体依赖本机安装，WebView 的字体回退字重、抗锯齿和连字效果不等同于 WezTerm 原生渲染。
+
+终端获得焦点时，`Ctrl+-` 缩小字号，`Ctrl++` 放大字号；兼容 `Ctrl+=`、`Ctrl+Shift+=` 和数字键盘加减号。每次 keydown 调整 1 CSS px，支持长按，限制在 10～32px；不接管带 Alt/Meta 修饰或输入法组合中的事件。`TerminalPanel` 使用 xterm 的自定义键盘处理器消费匹配事件，阻止默认页面缩放及向 Agent 发送该按键，其他按键保留原终端处理。修改 `terminal.options.fontSize` 后调用 FitAddon，通过已有 onResize → terminal_resize 同步行列数，不重建连接。连接尚未就绪时沿用连接成功后的最新尺寸同步。
+
+`terminalFontSize.ts` 首次使用时读取 localStorage 的 `kanban.terminal.fontSize`，无有效值时采用外观预设默认值；后续在内存中共享当前字号并写回本机存储。切任务、切项目、重连复用偏好，重新启动前端时读取保存值；不新增 IPC 或 SQLite 字段。存储读取/写入异常不阻断终端；写入失败时当前会话仍保留字号，跨重启保存不保证成功。
+
+卡片列表成功加载时，保留仍处于开发中的选中任务；否则按列表已有优先级顺序选择第一张开发中卡片。用户仍可点击其他开发中卡片切换，刷新不会抢回有效选择。完成、移回 todo 或删除当前任务后自动回退到剩余第一张开发中卡片；没有候选时显示“暂无开发中的任务”空终端。加载期间和没有项目时保留右侧终端区域；列表请求失败保留已有列表和选择。切项目由 Project key 卸载旧看板并重新应用首选规则。选择仅保存在当前组件内存中。
+
+自动或手动选择均更新卡片高亮和终端标题，TerminalPanel 创建唯一 connectionId，经 terminal_open 请求任务对应的目标。旧 effect 立即禁用输入、清理 xterm 和监听器、按旧 ID 释放连接；迟到输出不能写入新的 xterm。绑定异常的首张任务仍被选中并展示修复/核实入口，不跳到后续任务，也不自动派发或修复。完成、移回 todo、删除及切项目清理旧连接；列表刷新保持同一任务身份时不重连。
 
 本机 Herdr 的 Windows `agent attach` 实测不支持直接连接，因此使用同版本已验证的 `terminal session control <pane> --cols N --rows N` JSONL 控制协议。Rust 将 terminal.frame 的 base64 ANSI 数据送入 xterm，将输入/resize 转为 terminal.input/terminal.resize；关闭发送 terminal.release，只终止本应用控制器，不关闭底层 pane/Agent。没有强制 takeover。
 
 连接首帧限时 8 秒；每个输入批次重新核验目标，后台每 2 秒检查身份。输出分片 8 KiB，未消费窗口约 128 KiB，消费停滞 10 秒断开；单帧上限 8 MiB，前端 scrollback 3000 行，输入队列上限 64 KiB。断线时禁用输入并提供重连/修复入口。重连只建立查看连接，修复只改绑定，两者均不调用 prompt。
+
+### 6.6 自动分配、完成关闭与恢复（GitHub #10）
+
+`KanbanBoard → api → work_commands → lifecycle.rs` 复用 Workflow、SQLite 和 Herdr trait，外部请求不持有数据库 Mutex。
+
+- 首次启动先写 pending 生命周期意图。按项目 workspace 解析唯一 ID，仅选择目录一致、未被任何卡片占用的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。候选在数据库事务中唯一预占，冲突继续下一个。没有候选时新建同 workspace 独立 tab，目录为项目根目录、标签为 `kanban-<操作 UUID>`，不抢 Herdr 焦点。
+- 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；恢复启动显式 `resume <UUID>` 并指定项目目录。保留原有效任务绑定时直接连接，不创建或发送。
+- 会话仅接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报。读取缺失时不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
+- 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
+- 成功完成后的任务返回 dormant，恢复时不解析历史提示词、不发送原 prompt，精确确认恢复的 ID 后进入开发中。旧会话 ID 不会被一次错误 resume 的 ID 覆盖。
+- 启动超时或落库失败保留 unknown 与占用；提示词发送结果仍走原 `DispatchRecovery`，用户核实后再点击“核实启动结果”。核实本身不发送、启动或关闭；已确认派发、精确恢复的会话可以完成落库，否则必须确认本次启动的 pane 已不存在才释放。创建响应丢失时按唯一 tab 标签核实，不盲目新建。
+- 启动和关闭的未知结果仅影响相关任务。延迟核实请求不能覆盖新操作；删除相关任务/项目和修改项目配置受到未决操作约束。
+
+当前验证限于自动化与静态 CLI 协议核对。Windows shell 就绪判断、`/quit` 退出、新建及 resume 后 Herdr 会话 ID 上报，仍需真实桌面验收；会话 ID 缺失会显示可重试提示并保留 pane，不能把这一降级视为完整关闭/恢复验收通过。
 
 ## 7. 当前实现的关键边界与维护风险
 
@@ -353,12 +415,12 @@ sequenceDiagram
 
 当前结构的优点是入口清楚、组件职责容易定位、IPC 集中、模型较小；SQL、CLI 和文件访问都留在 Rust，React 不直接持有数据库连接。对于本地单用户看板，这种结构便于快速迭代。
 
-主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`workflow.rs` 集中处理绑定与派发一致性，`terminal.rs` 集中处理查看连接；`commands.rs` 保留既有 CRUD 和文件/技能读取。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
+主要复杂度集中在两个位置：`KanbanBoard` 同时协调列表、拖放、Agent 和弹层生命周期；`lifecycle.rs` 处理窗口及会话生命周期，`workflow.rs` 集中处理绑定与派发一致性，`terminal.rs` 集中处理查看连接；`commands.rs` 保留既有 CRUD 和文件/技能读取。扩展时应先围绕明确业务边界拆分，而不是单纯按文件长度拆文件。
 
 | 要做的改动 | 首先阅读/修改 | 必须同步考虑 |
 | --- | --- | --- |
 | 新增任务状态或转换规则 | types.ts、models.rs、KanbanBoard、TaskCard、commands.rs | SQL 状态约束、旧数据迁移、颜色/按钮、派发强制 in_progress 的语义 |
-| 新增项目/任务字段 | models.rs、types.ts、db.rs、commands.rs、api.ts | SELECT 列顺序与 row_to_task、表单、迁移、现有库兼容 |
+| 新增项目/任务字段 | models.rs、types.ts、db.rs、commands.rs、api.ts | tasks.rs 行映射与守卫、表单、迁移、现有库兼容 |
 | 修改提示词或引用格式 | PromptEditor、MentionNode、MentionPopover、dispatchUtils、DispatchDialog | 历史 prompt_json、预览一致性、失败引用、格式保留 |
 | 接入更多技能目录 | commands.rs 的 search_skills | 发现路径配置、去重、排序、缓存、完整 frontmatter 解析 |
 | 改 Herdr 协议或派发可靠性 | herdr.rs、workflow.rs、work_commands.rs、terminal.rs | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
@@ -394,13 +456,19 @@ npm run tauri build
 
 本次结果和明确的覆盖限制集中维护在[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。前端组件测试只模拟 Tauri；真实 Windows 验收另行使用隔离数据库、真实 WebView2 和 Herdr Agent。Rust 的两个 live 测试默认 ignored，必须显式提供以 kanban-acceptance- 开头的测试 workspace 才能执行，不向个人工作 pane 发送探针。
 
+2026-10-24 字号快捷键增量：现有 28 项前端测试及生产构建通过（保留大 chunk 提示）。真实 Chromium + React/xterm、模拟 Tauri IPC 的检查覆盖加减键变体、上下限、普通输入/Ctrl+C、终端外焦点、任务切换、重连、刷新恢复、存储异常及无效保存值。测试尺寸从 62×25 随缩小字号更新为 66×28，快捷键未产生 input 调用或重建连接。脚本及截图在 `.scratch/terminal-font-zoom/`；本次增量尚未执行原生 WebView2/Herdr 或桌面进程重启验收，不能沿用此前终端验收作为新快捷键已通过的证据。
+
+2026-10-24 默认布局与自动选择增量（[GitHub #11](https://github.com/legendxcheng/ContextSwitcher/issues/11)）：最终共享工作区的 40 项前端测试和生产构建通过，保留既有大 chunk 提示。组件测试覆盖启动首选、刷新保留手选、完成/移回/删除后回退、空态、异常绑定、派发后首选及项目切换清理。Chromium + 真实 React/xterm、模拟 Tauri IPC 的布局检查在 900/1280/1920px 宽度下测得终端 300/426.66/640px；1280px 三列约 200.45px，900px 列宽 180px 并局部横向滚动。拖动、方向键、默认比例随 resize、手调宽度保持、加载和无项目空态均通过。脚本、结果与截图位于 `.scratch/kanban-layout-*`。本次增量未执行原生 WebView2/真实 Herdr 验收或重新打包安装，不能把浏览器模拟结果当作桌面验收。
+
 ## 10. 推荐阅读路线
+
+项目内的 [kanban-dev 技能](.agents/skills/kanban-dev/SKILL.md) 以本文为研究入口。调用 `$kanban-dev` 并描述需求后，先研究实现方案；用户明确同意开发后再实施，开发完成时自动同步本文。具体阶段与完成条件见技能文件。
 
 初次接手时按以下顺序阅读，能先理解整体，再追踪关键风险：
 
 1. `types.ts → models.rs → db.rs`：厘清 Project、Task、引用和派发快照。
 2. `main.tsx → App.tsx → KanbanBoard.tsx`：理解页面和状态归属。
-3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
+3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/lifecycle.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
 4. `TaskEditPanel → PromptEditor → MentionNode/MentionPopover`：理解 prompt_json 如何产生。
 5. `DispatchDialog → dispatchUtils → dispatch_to_herdr`：理解“草稿、预览、实际发送、快照”之间的差异。
 6. `ProjectFormDialog → read_cs_tasks → 主项目 Task.to_dict()`：核对跨项目数据契约。
@@ -408,3 +476,8 @@ npm run tauri build
 ## 11. 规格与实施对应
 
 已实现[任务独立 pane 与右侧交互终端规格](docs/superpowers/specs/2026-10-24-kanban-herdr-task-pane.md)的主流程，来源为 [GitHub #4](https://github.com/legendxcheng/ContextSwitcher/issues/4)，拆分为 #5–#9。实现采用当前 Windows Herdr 可用的 JSONL 控制流，替代原先待验证的 agent attach/伪终端方案。未验收的系统 DPI 与独立打包环境在验收记录中单列。
+
+
+2026-10-24 自动流转增量：[GitHub #10](https://github.com/legendxcheng/ContextSwitcher/issues/10) 已发布并实装。新增 task_sessions/lifecycle_operations 和自动启动、完成、核实 IPC；结构与交互变化见 4–6 节。验证：28 项 Rust 测试通过、2 项已有 live 测试未执行；40 项前端测试与生产构建通过，保留既有大 chunk 提示。包括真实 SQLite 文件关闭重开后的会话恢复、并发独占、未知派发不重发、关闭超时、会话 ID 缺失、身份替换、恢复落库失败及迟到核实保护。本次未执行真实 Windows Tauri/Herdr/Codex 生命周期验收，未重启用户正在使用的应用。详见 [自动流转验证记录](docs/verification/2026-10-24-kanban-auto-flow.md)。
+
+2026-10-24 卡片增量来源：[GitHub #12](https://github.com/legendxcheng/ContextSwitcher/issues/12)。用户随后明确只保留顶部新建入口。实现及验证边界见[卡片验收记录](docs/verification/2026-10-24-kanban-cards.md)。

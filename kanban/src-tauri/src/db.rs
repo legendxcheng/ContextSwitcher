@@ -72,11 +72,50 @@ pub fn init(conn: &Connection) -> Result<()> {
     );
     CREATE UNIQUE INDEX IF NOT EXISTS one_pending_dispatch ON dispatch_operations(task_id) WHERE state IN ('pending','unknown');
     INSERT OR IGNORE INTO schema_migrations(version) VALUES (2);")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS task_sessions (
+        task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,
+        codex_session_id TEXT NOT NULL, cwd TEXT NOT NULL, updated_at TEXT NOT NULL
+    );
+    CREATE TABLE IF NOT EXISTS lifecycle_operations (
+        id TEXT PRIMARY KEY, task_id TEXT NOT NULL, kind TEXT NOT NULL,
+        state TEXT NOT NULL, target_json TEXT, error TEXT NOT NULL DEFAULT '',
+        created_at TEXT NOT NULL, evidence TEXT NOT NULL DEFAULT ''
+    );
+    CREATE UNIQUE INDEX IF NOT EXISTS one_active_lifecycle ON lifecycle_operations(task_id)
+        WHERE state IN ('pending','unknown');
+    INSERT OR IGNORE INTO schema_migrations(version) VALUES (3);",
+    )?;
+    let has_priority: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=4)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_priority {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE tasks ADD COLUMN priority TEXT NOT NULL DEFAULT 'normal' CHECK(priority IN ('normal','high','urgent'));
+            INSERT INTO schema_migrations(version) VALUES (4);")?;
+        tx.commit()?;
+    }
+    let has_archive: bool = conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=5)",
+        [],
+        |row| row.get(0),
+    )?;
+    if !has_archive {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN archived_at TEXT;
+            INSERT INTO schema_migrations(version) VALUES (5);",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE lifecycle_operations SET state='unknown',error='flow.interrupted' WHERE state='pending'", [])?;
     conn.execute(
         "UPDATE dispatch_operations SET state='unknown' WHERE state='pending'",
         [],

@@ -11,6 +11,7 @@ const paths = {
   check: "m8 12 3 3 5-6 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",
   edit: "m15 4 5 5 M4 20l5-1L21 7l-5-5L4 14z",
   trash: "M3 6h18 M9 6V3h6v3 M5 6l1 15h12l1-15 M10 10v7 M14 10v7",
+  archive: "M3 3h18v5H3z M5 8v13h14V8 M9 12h6",
   close: "m6 6 12 12 M6 18 18 6",
 } as const;
 

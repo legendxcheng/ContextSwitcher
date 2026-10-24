@@ -1,4 +1,5 @@
 export type TaskStatus = "todo" | "in_progress" | "done";
+export type TaskPriority = "normal" | "high" | "urgent";
 
 export interface Project {
   id: string;
@@ -10,6 +11,10 @@ export interface Project {
 }
 
 export interface Task {
+  priority: TaskPriority;
+  archived_at: string | null;
+  cleanup_required: boolean;
+  flow?: { session_id: string | null; operation_id: string | null; kind: string | null; state: string | null; error: string; pane_id: string | null } | null;
   binding?: TaskBinding | null;
   id: string;
   project_id: string;
@@ -34,7 +39,7 @@ export interface HerdrTarget {
   status: string;
 }
 export interface TaskBinding {
-  state: "valid" | "reserved" | "pending" | "unknown" | "repair" | "unbound";
+  state: "valid" | "reserved" | "pending" | "unknown" | "repair" | "unbound" | "dormant";
   target: HerdrTarget | null;
   operation: { id: string; prompt: string; created_at: string; target: HerdrTarget } | null;
 }

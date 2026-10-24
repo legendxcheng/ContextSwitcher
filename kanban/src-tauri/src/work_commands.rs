@@ -3,6 +3,45 @@ use crate::{models::DispatchRecord, workflow::Workflow};
 use std::sync::Arc;
 use tauri::State;
 
+#[tauri::command]
+pub async fn start_task(
+    app: State<'_, Arc<Workflow>>,
+    task_id: String,
+    prompt_text: String,
+    operation_id: String,
+) -> Result<crate::lifecycle::Outcome, String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        app.start_task(&task_id, &prompt_text, &operation_id)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn complete_task(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    task_id: String,
+    operation_id: String,
+) -> Result<crate::lifecycle::Outcome, String> {
+    let app = app.inner().clone();
+    manager.close_task(&task_id);
+    tauri::async_runtime::spawn_blocking(move || app.complete_task(&task_id, &operation_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
+pub async fn recover_lifecycle(
+    app: State<'_, Arc<Workflow>>,
+    task_id: String,
+    operation_id: String,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || app.recover_lifecycle(&task_id, &operation_id))
+        .await
+        .map_err(|e| e.to_string())?
+}
+
 #[derive(serde::Serialize)]
 pub struct AgentChoice {
     name: String,

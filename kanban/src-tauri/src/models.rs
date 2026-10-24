@@ -45,8 +45,31 @@ impl TaskStatus {
     }
 }
 
+#[derive(Debug, Serialize, Deserialize, Clone, Copy, PartialEq, Eq, Default)]
+#[serde(rename_all = "snake_case")]
+pub enum TaskPriority {
+    #[default]
+    Normal,
+    High,
+    Urgent,
+}
+
+impl TaskPriority {
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Normal => "normal",
+            Self::High => "high",
+            Self::Urgent => "urgent",
+        }
+    }
+}
+
 #[derive(Debug, Serialize, Deserialize, Clone)]
 pub struct Task {
+    pub priority: TaskPriority,
+    pub archived_at: Option<String>,
+    pub cleanup_required: bool,
+    pub flow: Option<crate::lifecycle::Flow>,
     pub binding: Option<crate::workflow::Binding>,
     pub id: String,
     pub project_id: String,
