@@ -23,7 +23,30 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"file" | "skill">("file");
   const boxRef = useRef<HTMLDivElement>(null);
+  const revealSelection = useRef(false);
   const [position, setPosition] = useState({ left: 0, top: 0 });
+
+  useLayoutEffect(() => {
+    if (boxRef.current) boxRef.current.scrollTop = 0;
+  }, [items]);
+
+  useLayoutEffect(() => {
+    if (!open) { revealSelection.current = false; return; }
+    if (!revealSelection.current) return;
+    revealSelection.current = false;
+    const box = boxRef.current;
+    const selected = box?.children[index] as HTMLElement | undefined;
+    if (!box || !selected) return;
+    // Scroll only the list, not the editor/form ancestors. Tall entries start at
+    // their heading so the skill remains identifiable before reading its text.
+    const viewportTop = box.getBoundingClientRect().top + box.clientTop;
+    const entry = selected.getBoundingClientRect();
+    if (entry.top < viewportTop || entry.height > box.clientHeight) {
+      box.scrollTop += entry.top - viewportTop;
+    } else if (entry.bottom > viewportTop + box.clientHeight) {
+      box.scrollTop += entry.bottom - viewportTop - box.clientHeight;
+    }
+  }, [index, open, items]);
 
   useLayoutEffect(() => {
     if (!editor || !open || items.length === 0) return;
@@ -130,10 +153,12 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
       if (e.key === "ArrowDown") {
         e.preventDefault();
         e.stopPropagation();
+        revealSelection.current = true;
         setIndex((i) => (i + 1) % items.length);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
         e.stopPropagation();
+        revealSelection.current = true;
         setIndex((i) => (i - 1 + items.length) % items.length);
       } else if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
@@ -177,11 +202,15 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
           key={s.ref}
           className={"mention-item" + (i === index ? " active" : "")}
           onMouseDown={(e) => { e.preventDefault(); insertMention(s); }}
-          onMouseEnter={() => setIndex(i)}
+          // Scrolling can move rows under a stationary pointer. Only actual
+          // pointer movement should override the keyboard-selected candidate.
+          onMouseMove={() => { revealSelection.current = false; setIndex(i); }}
         >
           <span className="mention-kind">{s.kind === "file" ? "@" : "$"}</span>
-          <span className="mention-label">{s.label}</span>
-          {s.description && <span className="mention-desc">{s.description}</span>}
+          <span className="mention-content">
+            <span className="mention-label">{s.label}</span>
+            {s.description && <span className="mention-desc">{s.description}</span>}
+          </span>
         </div>
       ))}
     </div>, document.body,
