@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-24 图片输入增量：新建/编辑任务支持剪贴板图片、120px 缩略图、悬停删除及点击放大；图片持久化与两种派发路径见 6.3.1。实际通过的验证及原生 Ctrl+V 未覆盖项见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
+
 更新日期：2026-10-24（新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 2026-10-24 本次增量：自动启动的任务共用对应 workspace 的 `kanban` Tab，各自独占 pane；并发分配与创建结果核实见 6.6 节，验证见[共用 Tab 验证记录](docs/verification/2026-10-24-kanban-shared-tab.md)。
@@ -69,6 +71,10 @@ kanban/
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
 │  ├─ TaskFormDialog.tsx           新建/编辑共用居中弹窗：标题、提示词、优先级
 │  ├─ PromptEditor.tsx             Tiptap 初始化与 JSON 输出
+│  ├─ imagePaste.ts               图片 paste、导入占位与异步图文顺序
+│  ├─ PromptImageNode.tsx / ImagePreview.tsx  缩略图、悬停删除、大图与焦点恢复
+│  ├─ useImageDraft.ts             表单独立的惰性图片草稿及迟到关闭
+│  ├─ imageInput.test.tsx          图片表单、撤销、多图顺序及预览回归
 │  ├─ MentionNode.ts              自定义原子行内 mention 节点
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
@@ -99,6 +105,9 @@ kanban/
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
 │     ├─ lifecycle_tests/          共用 fixture 与分配、后台启动、完成清理、恢复场景
 │     ├─ start.rs                  持久化受理、后台引用展开及启动通知
+│     ├─ images.rs                 附件/引用存储、短事务、后台回收及提示词解析
+│     ├─ image_commands.rs         图片草稿、导入、预览及关闭 IPC
+│     ├─ image_tests.rs / lifecycle_tests/images.rs  持久化、回收、两种派发与不重发回归
 │     ├─ workflow.rs               任务绑定、派发操作及恢复事务
 │     ├─ workflow_tests/           独占、派发恢复、任务变更互斥与显式 live 场景
 │     ├─ herdr.rs                  Cli/Herdr 对外适配、目标身份核验及 workspace/pane 操作
@@ -251,7 +260,10 @@ flowchart TD
 | `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
-| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 8；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序），初始化可重复执行 |
+| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 9；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用），初始化可重复执行 |
+| `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
+| `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
+| `image_prompt_snapshots` | 手动图片派发的操作 ID、正文及展开文本；重试同一操作使用同一快照，无实际操作记录的孤儿准备在任务删除/应用重开后释放 |
 
 Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tasks 表。`flow` 包含保存的会话 ID、最近生命周期操作及错误。无活跃绑定但有会话记录时返回 dormant；没有会话记录的旧开发中任务返回 repair，旧共享目标不会自动认领。完成后成功关闭才解除 pane 绑定；缺会话 ID、身份变化或关闭失败时保留目标并提供重试关闭。移回未开发保留绑定；删除解除绑定，保留操作审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
 
@@ -278,8 +290,12 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_project` | id、name、可选 fallbackPath | 稳定 ID 改名，读回实际结果并返回 Project |
 | `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
-| `create_task` | projectId、name、priority、可选 promptJson | 单条 INSERT 保存标题、提示词、优先级，创建 todo 卡片并返回 Task；省略正文兼容 `{}` |
-| `update_task` | id、name、promptJson、priority | 更新名称、正文、优先级及 updated_at；拒绝归档任务 |
+| `create_task` | projectId、name、priority、可选 promptJson/draftId | 同一事务保存任务及正文图片引用，返回 todo Task；省略正文兼容 `{}`，旧无图调用不需要草稿 |
+| `update_task` | id、name、promptJson、priority、可选 draftId | 同一事务更新正文和图片引用；校验草稿/任务归属，拒绝归档任务，失败保留原数据 |
+| `open_image_draft` | projectId、可选 taskId | 返回草稿 UUID；编辑时保护原任务图片，支持取消和撤销 |
+| `import_prompt_image` | draftId、name、mime、base64 data | 校验 PNG/JPEG/WebP，返回稳定图片元数据；解码和文件写入不持应用数据库 Mutex |
+| `preview_prompt_image` | draftId、imageId | 校验草稿引用及文件摘要，返回临时预览 data URL |
+| `close_image_draft` | draftId | 释放草稿引用并安排独立连接回收，不删除仍被任务或操作引用的原图 |
 | `update_task_status` | id、status | todo 直接更新；done 兼容入口转完整完成工作流；拒绝直接 in_progress |
 | `start_task` | taskId、operationId | 短事务持久化受理后返回 Flow；后台展开已保存提示词、预占/创建 pane 并启动或恢复；同一操作 ID 不重复执行 |
 | `complete_task` | taskId、operationId | 标记完成、保存会话、关闭 pane；返回可为空的 warning |
@@ -291,7 +307,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `read_file_content` | absPath | UTF-8 文件全文 |
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
 | `herdr_list_agents` | projectId | 后端解析 session + workspace ID，返回 occupied_by、verified_task_id、完整实时 target 和状态；不修改任务或绑定 |
-| `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId | 后端从项目解析 workspace，预占后发送并落库 |
+| `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId、可选 promptJson | 后端从项目解析 workspace；有图正文由后端冻结、解析及校验，再经原独占派发流程；旧无图文本调用兼容 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
 | `terminal_open` | taskId、connectionId、cols、rows、output Channel | 从任务解析有效目标；创建控制流 |
@@ -395,6 +411,18 @@ Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部�
 文件排除使用迭代后的 `filter`，没有 `filter_entry` 目录剪枝，排除目录仍可能被遍历。查询没有 debounce 或缓存。候选 effect 的 cancelled 标记防止过期结果写回，但不会停止已经发起的 Rust 扫描。
 
 本次 84 项前端测试、78 项 Rust 测试通过，5 项需独立 Herdr 环境的测试按原规则跳过；生产构建通过，仍有既有大 chunk 提示。真实 Chromium + 生产前端验证 `$kanban-dev` 的候选、键盘/鼠标选择、新建/编辑保存及重新打开、切项目隔离；搜索桥接从当前源码提取的 Rust 函数扫描真实目录，Tauri 通信及任务存储为模拟。未验收原生 WebView2/Herdr 技能加载，未重新打包安装。证据与命令见[项目技能发现验收记录](docs/verification/2026-10-24-kanban-project-skills.md)。
+
+### 6.3.1 剪贴板图片、缩略图与持久引用（2026-10-24，GitHub #30–#34）
+
+`TaskFormDialog → useImageDraft → PromptEditor / imagePaste → 图片 IPC → images`。普通文字继续使用原粘贴流程；剪贴板图片在当前光标位置放置导入占位，串行完成导入并按映射后的锚点插入 `promptImage`。占位保持在用户后输入文字之前，同锚点多图按顺序推进；关闭/卸载后的迟到结果不写入其他编辑器。剪贴板同源名称的不同 MIME 表示选取一份，独立文件及 HTML 多图保留顺序。导入未完成时禁用保存，失败保留其他输入；取消只释放本次草稿。
+
+图片节点保存 `imageId/name/bytes`，预览 URL 不进入持久正文。图片按 UUID 保存在数据库同级 `images/`，遵循隔离数据目录；metadata 保存 MIME、尺寸与 SHA-256。支持 PNG、JPEG、WebP，单张 10 MiB / 4000 万像素，正文最多 20 张、累计 50 MiB。导入阶段在数据库锁外解码和同步写入临时文件，再以短事务确认草稿仍有效并提交引用；失败在锁外清理未提交文件。
+
+按用户追加确认的交互，正文仅显示 120×120px 缩略图；鼠标悬停或键盘聚焦时显示右上角删除按钮，删除可撤销。点击缩略图通过 Portal 打开大图，底层任务表单 inert；Escape、关闭按钮或背景点击只关闭大图并恢复缩略图焦点。多图横向排列，窄窗口仍由原表单正文区域滚动。
+
+保存任务及其引用在一个事务内完成。编辑草稿保护原引用，取消不改原任务，失败可重试；归档保留原图。首次启动受理时在原短事务中固定图片引用，后台通过共享解析器生成原图绝对路径和明确 `view_image` 指令；后续编辑不改变该次输入。手动图片派发同样冻结正文及展开文本，旧卡片正文变化会要求刷新；普通文件引用展开和原生技能名称保持原语义。发送前再校验操作图片可读及摘要一致，缺图不静默发送残余文字，发送后的未知结果不重发；恢复旧会话不再解析或发送历史图片。
+
+单任务删除和草稿关闭只安排后台回收，文件操作使用独立 SQLite 连接，不持应用数据库 Mutex。回收保护任务、草稿、已受理启动和真实派发记录的引用；仅在删除/重开边界释放没有实际操作记录的孤儿手动准备。实际操作证据继续保留，不依赖 Herdr 返回才允许删除任务。详情及验证限制见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
 ### 6.4 派发到 Herdr
 

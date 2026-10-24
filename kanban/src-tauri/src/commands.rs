@@ -32,14 +32,17 @@ pub fn create_task(
     name: String,
     priority: TaskPriority,
     prompt_json: Option<String>,
+    draft_id: Option<String>,
 ) -> Result<Task, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::tasks::create(
+    crate::images::save_task(
         &conn,
+        None,
         &project_id,
         &name,
-        priority,
         prompt_json.as_deref().unwrap_or("{}"),
+        priority,
+        draft_id.as_deref(),
     )
 }
 
@@ -50,9 +53,24 @@ pub fn update_task(
     name: String,
     prompt_json: String,
     priority: TaskPriority,
+    draft_id: Option<String>,
 ) -> Result<(), String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::tasks::update(&conn, &id, &name, &prompt_json, priority)
+    let project: String = conn
+        .query_row("SELECT project_id FROM tasks WHERE id=?1", [&id], |r| {
+            r.get(0)
+        })
+        .map_err(|_| "task.missing")?;
+    crate::images::save_task(
+        &conn,
+        Some(&id),
+        &project,
+        &name,
+        &prompt_json,
+        priority,
+        draft_id.as_deref(),
+    )
+    .map(|_| ())
 }
 
 #[tauri::command]

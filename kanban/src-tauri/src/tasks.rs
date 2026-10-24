@@ -121,7 +121,9 @@ pub fn delete(db: &mut Connection, id: &str) -> Result<(), String> {
     let tx = db.transaction().map_err(err)?;
     tx.execute("DELETE FROM tasks WHERE id=?1", [id])
         .map_err(err)?;
-    tx.commit().map_err(err)
+    tx.commit().map_err(err)?;
+    crate::images::schedule_collection(db);
+    Ok(())
 }
 
 pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {

@@ -16,10 +16,15 @@ export const deleteProject = (id: string) => invoke<void>("delete_project", { id
 
 // Tasks
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
-export const createTask = (projectId: string, name: string, priority: TaskPriority, promptJson: string) =>
-  invoke<Task>("create_task", { projectId, name, priority, promptJson });
-export const updateTask = (id: string, name: string, promptJson: string, priority: TaskPriority) =>
-  invoke<void>("update_task", { id, name, promptJson, priority });
+export const createTask = (projectId: string, name: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
+  invoke<Task>("create_task", { projectId, name, priority, promptJson, draftId });
+export const updateTask = (id: string, name: string, promptJson: string, priority: TaskPriority, draftId?: string) =>
+  invoke<void>("update_task", { id, name, promptJson, priority, draftId });
+export interface PromptImage { id: string; name: string; mime: string; bytes: number; width: number; height: number }
+export const openImageDraft = (projectId: string, taskId?: string) => invoke<string>("open_image_draft", { projectId, taskId });
+export const importPromptImage = (draftId: string, name: string, mime: string, data: string) => invoke<PromptImage>("import_prompt_image", { draftId, name, mime, data });
+export const previewPromptImage = (draftId: string, imageId: string) => invoke<string>("preview_prompt_image", { draftId, imageId });
+export const closeImageDraft = (draftId: string) => invoke<void>("close_image_draft", { draftId });
 export const updateTaskStatus = (id: string, status: string) =>
   status === "done" ? completeTask(id, crypto.randomUUID()) : invoke<FlowOutcome>("update_task_status", { id, status });
 export interface FlowOutcome { warning?: string | null }
@@ -49,9 +54,9 @@ export const readSkillContent = (skillMdPath: string) =>
 export const herdrListAgents = (projectId: string) =>
   invoke<HerdrAgent[]>("herdr_list_agents", { projectId });
 export const dispatchToHerdr = (
-  taskId: string, agentName: string, workspace: string, promptText: string, operationId: string,
+  taskId: string, agentName: string, workspace: string, promptText: string, operationId: string, promptJson?: string,
 ) => invoke<DispatchRecord>("dispatch_to_herdr", {
-  taskId, agentName, workspace, promptText, operationId,
+  taskId, agentName, workspace, promptText, operationId, ...(promptJson === undefined ? {} : { promptJson }),
 });
 export const resolveDispatch = (taskId: string, operationId: string, sent: boolean, evidence: string) =>
   invoke<void>("resolve_dispatch", { taskId, operationId, sent, evidence });

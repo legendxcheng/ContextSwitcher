@@ -2,6 +2,8 @@ mod agent_status;
 mod commands;
 mod db;
 mod herdr;
+mod image_commands;
+mod images;
 mod lifecycle;
 mod models;
 mod project_commands;
@@ -51,6 +53,10 @@ pub fn run() {
             }
         })
         .invoke_handler(tauri::generate_handler![
+            image_commands::open_image_draft,
+            image_commands::import_prompt_image,
+            image_commands::preview_prompt_image,
+            image_commands::close_image_draft,
             commands::list_projects,
             project_commands::create_project,
             project_commands::update_project,

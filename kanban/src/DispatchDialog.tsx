@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import type { Task, Project, HerdrAgent } from "./types";
 import * as api from "./api";
-import { resolveMentions } from "./dispatchUtils";
+import { hasPromptImages, resolveMentions } from "./dispatchUtils";
 import { tr, errorText } from "./i18n";
 
 interface DispatchDialogProps {
@@ -66,9 +66,9 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
     try {
       // Expand files, retaining skill names for the target agent to resolve.
       const doc = JSON.parse(task.prompt_json);
-      const resolved = await resolveMentions(doc, project.root_path);
+      const resolved = hasPromptImages(doc) ? "" : await resolveMentions(doc, project.root_path);
       if (!mounted.current) return;
-      await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current);
+      await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current, hasPromptImages(doc) ? task.prompt_json : undefined);
       // A closed dialog may refresh persisted results, but cannot select a task
       // or close another dialog that the user has opened in the meantime.
       if (!mounted.current) { onRefresh?.(); return; }
@@ -136,6 +136,8 @@ function extractTextWithMentions(doc: any): string {
   function walk(node: any) {
     if (node.type === "text") {
       text += node.text;
+    } else if (node.type === "promptImage") {
+      text += `\n[${tr("image.reference")}: ${node.attrs.name}]\n`;
     } else if (node.type === "mention") {
       text += node.attrs.kind === "file"
         ? `\n[@文件: ${node.attrs.label}]\n`

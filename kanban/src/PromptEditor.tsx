@@ -5,6 +5,9 @@ import { MentionNode } from "./MentionNode";
 import { MentionPopover } from "./MentionPopover";
 import { useEffect } from "react";
 import { tr } from "./i18n";
+import { PromptImageNode } from "./PromptImageNode";
+import { ImagePaste } from "./imagePaste";
+import "./promptImages.css";
 
 interface PromptEditorProps {
   content: string; // Tiptap JSON string
@@ -12,14 +15,19 @@ interface PromptEditorProps {
   onChange: (json: string) => void;
   labelledBy?: string;
   disabled?: boolean;
+  getDraftId?: () => Promise<string>;
+  onImageBusy?: (busy: boolean) => void;
+  onImageError?: (reason: unknown) => void;
 }
 
-export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled = false }: PromptEditorProps) {
+export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled = false, getDraftId = async () => { throw new Error("image.draft_closed"); }, onImageBusy = () => {}, onImageError = () => {} }: PromptEditorProps) {
   const editor = useEditor({
     extensions: [
       StarterKit,
       Placeholder.configure({ placeholder: tr("task.prompt_placeholder") }),
       MentionNode,
+      PromptImageNode.configure({ getDraftId }),
+      ImagePaste.configure({ getDraftId, onBusy: onImageBusy, onError: onImageError }),
     ],
     content: (() => {
       try { const value = JSON.parse(content); return value?.type === "doc" ? value : null; } catch { return null; }
@@ -37,6 +45,7 @@ export function PromptEditor({ content, rootPath, onChange, labelledBy, disabled
     <EditorContext.Provider value={{ editor }}>
       <div className="prompt-editor-wrap">
         <EditorContent editor={editor} className="prompt-editor" />
+        <p className="image-paste-hint">{tr("image.hint")}</p>
         {!disabled && <MentionPopover rootPath={rootPath} />}
       </div>
     </EditorContext.Provider>

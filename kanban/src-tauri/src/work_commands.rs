@@ -66,9 +66,26 @@ pub async fn dispatch_to_herdr(
     agent_name: String,
     prompt_text: String,
     operation_id: String,
+    prompt_json: Option<String>,
 ) -> Result<DispatchRecord, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let saved: String = app
+            .db
+            .lock()
+            .map_err(|e| e.to_string())?
+            .query_row(
+                "SELECT prompt_json FROM tasks WHERE id=?1",
+                [&task_id],
+                |r| r.get(0),
+            )
+            .map_err(|_| "task.missing")?;
+        let document = prompt_json.as_deref().unwrap_or(&saved);
+        if !crate::images::document_images(document)?.is_empty()
+            || !crate::images::document_images(&saved)?.is_empty()
+        {
+            return app.dispatch_document(&task_id, &agent_name, document, &operation_id);
+        }
         app.dispatch(&task_id, &agent_name, &prompt_text, &operation_id)
     })
     .await

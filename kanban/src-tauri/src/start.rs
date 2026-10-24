@@ -62,6 +62,9 @@ impl Workflow {
                  LEFT JOIN task_working_directories d ON d.task_id=t.id WHERE t.id=?1", [task],
                 |r| Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).map_err(err)?;
             let needs_prompt = !saved && crate::workflow::binding(&tx, task)?.target.is_none();
+            if needs_prompt {
+                crate::images::pin_prompt(&tx, task, op, &prompt_json)?;
+            }
             tx.execute("INSERT INTO start_requests(operation_id,project_id,workspace,cwd,prompt_json,needs_prompt,original_status)
                 VALUES (?1,?2,?3,?4,?5,?6,?7)", params![op,project_id,workspace,cwd,prompt_json,needs_prompt,original_status]).map_err(err)?;
             let accepted = lifecycle::view(&tx, task)?;
@@ -94,7 +97,11 @@ impl Workflow {
                 };
                 let prompt = if request.needs_prompt {
                     progress("reading_prompt")?;
-                    match resolve_prompt(&request.prompt_json) {
+                    let resolved = {
+                        let db = worker.db.lock().map_err(err)?;
+                        crate::images::resolve_prompt(&db, &request.prompt_json)
+                    };
+                    match resolved {
                         Ok(text) => text,
                         Err(error) => {
                             worker.fail_unstarted(&changed.task_id, &changed.operation_id, &error)?;
@@ -141,43 +148,4 @@ impl Workflow {
         }
         Ok(())
     }
-}
-
-// Same saved Tiptap/file/native-skill format as explicit manual dispatch.
-fn resolve_prompt(json: &str) -> Result<String, String> {
-    fn walk(node: &serde_json::Value, text: &mut String) {
-        let kind = node["type"].as_str().unwrap_or("");
-        match kind {
-            "text" => text.push_str(node["text"].as_str().unwrap_or("")),
-            "mention" => {
-                let attrs = &node["attrs"];
-                let label = attrs["label"].as_str().unwrap_or("");
-                if attrs["kind"] == "file" {
-                    let path = attrs["ref"].as_str().unwrap_or("");
-                    match std::fs::read_to_string(path) {
-                        Ok(content) => text.push_str(&format!(
-                            "\n--- @文件: {label} ({path}) ---\n```\n{content}\n```\n"
-                        )),
-                        Err(error) => text.push_str(&format!("\n[引用失败: {label} — {error}]\n")),
-                    }
-                } else {
-                    text.push_str(&format!("${label}"));
-                }
-            }
-            _ => {
-                if let Some(children) = node["content"].as_array() {
-                    for child in children {
-                        walk(child, text);
-                    }
-                }
-            }
-        }
-        if matches!(kind, "paragraph" | "heading") {
-            text.push('\n');
-        }
-    }
-    let doc = serde_json::from_str(json).map_err(|e| format!("flow.prompt_invalid: {e}"))?;
-    let mut text = String::new();
-    walk(&doc, &mut text);
-    Ok(text.trim().into())
 }

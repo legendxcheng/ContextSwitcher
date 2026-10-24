@@ -5,6 +5,7 @@ import { PromptEditor } from "./PromptEditor";
 import { PrioritySelect } from "./PrioritySelect";
 import * as api from "./api";
 import { errorText, tr } from "./i18n";
+import { useImageDraft } from "./useImageDraft";
 
 const emptyPrompt = JSON.stringify({ type: "doc", content: [{ type: "paragraph" }] });
 
@@ -16,6 +17,9 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
   const [priority, setPriority] = useState<TaskPriority>(task?.priority ?? "normal");
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+  const [imageBusy, setImageBusy] = useState(false);
+  const [imageError, setImageError] = useState("");
+  const draft = useImageDraft(project.id, task?.id);
   const submitting = useRef(false);
   const titleInput = useRef<HTMLInputElement>(null);
   const [opener] = useState(() => document.activeElement as HTMLElement | null);
@@ -40,11 +44,13 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
 
   async function submit(event: React.FormEvent) {
     event.preventDefault();
-    if (!name.trim() || submitting.current) return;
+    if (!name.trim() || submitting.current || imageBusy) return;
     submitting.current = true; setSaving(true); setError("");
     try {
-      if (task) await api.updateTask(task.id, name.trim(), promptJson, priority);
-      else await api.createTask(project.id, name.trim(), priority, promptJson);
+      const ready = draft.existingId();
+      const draftId = ready ? await ready : undefined;
+      if (task) await api.updateTask(task.id, name.trim(), promptJson, priority, draftId);
+      else await api.createTask(project.id, name.trim(), priority, promptJson, draftId);
     } catch (reason) {
       setError(errorText(reason));
       return;
@@ -88,7 +94,9 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
         <div>
           <label id={`${id}-prompt`} className="field-label">{tr("task.prompt")}</label>
           <PromptEditor content={promptJson} rootPath={project.root_path} onChange={setPromptJson}
+            getDraftId={draft.getId} onImageBusy={busy => { setImageBusy(busy); if (busy) setImageError(""); }} onImageError={reason => setImageError(errorText(reason))}
             labelledBy={`${id}-prompt`} disabled={saving} />
+          {imageError && <p role="alert" className="error">{imageError}</p>}
         </div>
         <div>
           <label className="field-label" htmlFor={`${id}-priority`}>{tr("priority.label")}</label>
@@ -98,7 +106,7 @@ export function TaskFormDialog({ project, task, onClose, onSaved }: {
       </div>
       <div className="task-form-footer">
         <button type="button" className="btn-secondary" disabled={saving} onClick={close}>{tr("common.cancel")}</button>
-        <button type="submit" className="btn-primary" disabled={saving || !name.trim()}>
+        <button type="submit" className="btn-primary" disabled={saving || imageBusy || !name.trim()}>
           {saving && <span className="spinner" />}{tr(task ? "common.save" : "task.add")}
         </button>
       </div>

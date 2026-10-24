@@ -162,11 +162,16 @@ pub fn init(conn: &Connection) -> Result<()> {
     );
     CREATE INDEX IF NOT EXISTS pane_allocation_workspace ON pane_allocations(session,workspace,resolved);",
     )?;
+    crate::images::init(conn)?;
     Ok(())
 }
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
+    conn.execute("DELETE FROM image_drafts", [])?;
+    let _ = crate::images::release_abandoned_preparations(conn, true);
+    // Reclamation cannot prevent opening otherwise usable task data.
+    crate::images::schedule_collection(conn);
     conn.execute("UPDATE workspace_operations SET state='unknown',error='workspace.interrupted' WHERE state='pending'", [])?;
     conn.execute("UPDATE lifecycle_operations SET state='unknown',error='flow.interrupted' WHERE state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)", [])?;
     conn.execute(

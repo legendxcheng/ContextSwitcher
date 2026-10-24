@@ -394,7 +394,9 @@ impl Workflow {
         }
         crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
         match self.herdr.send_checked(&target, prompt, &|| {
-            crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)
+            let db = self.db.lock().map_err(err)?;
+            crate::tasks::ensure_active(&db, task)?;
+            crate::images::verify_operation(&db, operation)
         }) {
             Ok(()) => match self.finish(&op, true, "") {
                 Ok(()) => Ok(record(&op)),

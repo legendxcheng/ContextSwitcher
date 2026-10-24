@@ -1,4 +1,5 @@
 use super::*;
+mod images;
 use crate::workflow::{Herdr, SendError};
 use std::collections::BTreeMap;
 use std::sync::{Arc, Mutex};
