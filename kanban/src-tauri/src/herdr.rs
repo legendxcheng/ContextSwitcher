@@ -1,5 +1,8 @@
 //! The external CLI boundary. Every request is bounded; arguments never use a shell.
 use crate::workflow::{Herdr, SendError, Target};
+#[cfg(test)]
+#[path = "session_isolation_tests.rs"]
+mod session_isolation_tests;
 use serde_json::Value;
 use std::{
     io::Read,
@@ -376,6 +379,9 @@ impl Herdr for Cli {
             "--pane",
             &target.pane_id,
             "--",
+            // Hooks must inherit this pane's environment, including on resume.
+            // A shared app-server may retain another pane's HERDR_PANE_ID.
+            "--no-daemon",
         ];
         if let Some(id) = resume {
             args.extend(["resume", id]);
@@ -413,7 +419,20 @@ impl Herdr for Cli {
         if !live.same_identity(target) {
             return Err("binding.identity_changed".into());
         }
-        codex_session_id(agent)
+        if let Some(id) = codex_session_id(agent)? {
+            return Ok(Some(id));
+        }
+        // Codex defers the resume SessionStart hook until the first new input.
+        // Before then, accept only our exact, independently observed resume
+        // command in the same live foreground process. Never use a saved ID or
+        // another pane's report as evidence that this process resumed it.
+        if agent.get("interactive_ready").and_then(Value::as_bool) != Some(true) {
+            return Ok(None);
+        }
+        let info = self.json(&["pane", "process-info", "--pane", &target.pane_id])?;
+        let id = codex_resume_session(&info, target)?;
+        self.check_target(target).map_err(|e| e.message)?;
+        Ok(id)
     }
     fn pane_exists(&self, target: &Target) -> Result<bool, String> {
         if target.session != self.session {
@@ -609,6 +628,50 @@ fn codex_session_id(agent: &Value) -> Result<Option<String>, String> {
     let id = field(session, "value")?;
     uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
     Ok(Some(id.into()))
+}
+
+fn codex_resume_session(doc: &Value, target: &Target) -> Result<Option<String>, String> {
+    let info = doc
+        .pointer("/result/process_info")
+        .ok_or("herdr.invalid_response")?;
+    let shell = info["shell_pid"]
+        .as_u64()
+        .ok_or("binding.identity_unknown")?;
+    let group = info["foreground_process_group_id"]
+        .as_u64()
+        .ok_or("binding.identity_unknown")?;
+    if target.agent != "codex"
+        || info["pane_id"].as_str() != Some(&target.pane_id)
+        || group == 0
+        || format!("{shell}:{group}") != target.process_id
+    {
+        return Err("binding.identity_changed".into());
+    }
+    let processes = info["foreground_processes"]
+        .as_array()
+        .ok_or("herdr.invalid_response")?;
+    let candidates: Vec<_> = processes
+        .iter()
+        .filter(|p| p["pid"].as_u64() == Some(group))
+        .collect();
+    let [process] = candidates.as_slice() else {
+        return Ok(None);
+    };
+    let Some(argv) = process["argv"]
+        .as_array()
+        .and_then(|a| a.iter().map(Value::as_str).collect::<Option<Vec<_>>>())
+    else {
+        return Ok(None);
+    };
+    let [exe, "--no-daemon", "resume", id, "-C", cwd] = argv.as_slice() else {
+        return Ok(None);
+    };
+    let name = exe.rsplit(['/', '\\']).next().unwrap_or("");
+    if !matches!(name.to_ascii_lowercase().as_str(), "codex" | "codex.exe") || cwd.is_empty() {
+        return Ok(None);
+    }
+    uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
+    Ok(Some((*id).into()))
 }
 
 // Windows Codex buffers pasted characters and can interpret Enter as a newline.
