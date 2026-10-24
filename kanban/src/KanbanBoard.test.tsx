@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { invoke } from "@tauri-apps/api/core";
 import { KanbanBoard } from "./KanbanBoard";
@@ -7,6 +7,11 @@ import App from "./App";
 import type { HerdrAgent, Project, Task, TaskStatus } from "./types";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn(), Channel: class { onmessage = () => {}; } }));
+const flowEvents = vi.hoisted(() => new Set<(event: { payload: { project_id: string; task_id: string; operation_id: string } }) => void>());
+vi.mock("@tauri-apps/api/event", () => ({ listen: vi.fn(async (_name, callback) => {
+  flowEvents.add(callback);
+  return () => { flowEvents.delete(callback); };
+}) }));
 const terminalSize = vi.hoisted(() => ({ cols: 80, rows: 24 }));
 // The terminal renderer is an external DOM/canvas system, simulated at that boundary.
 vi.mock("@xterm/xterm", () => ({ Terminal: class {
@@ -56,6 +61,7 @@ let deleted: boolean;
 const sendPrompt = vi.fn<(input: Record<string, string>) => Promise<void>>();
 
 beforeEach(() => {
+  flowEvents.clear();
   terminalSize.cols = 80; terminalSize.rows = 24;
   vi.mocked(invoke).mockReset();
   storedTask = {
@@ -90,7 +96,9 @@ beforeEach(() => {
       case "complete_task": storedTask.status = "done"; return {};
       case "start_task":
         await sendPrompt(input);
-        storedTask.status = "in_progress"; bindTask(); return {};
+        storedTask.status = "in_progress"; bindTask();
+        storedTask.flow = { session_id: null, operation_id: input.operationId, kind: "start", state: "succeeded", error: "", pane_id: "pane-1" };
+        return storedTask.flow;
       case "update_task_status":
         storedTask.status = input.status as TaskStatus;
         return;
@@ -292,7 +300,7 @@ function column(status: TaskStatus) {
 }
 
 function dropOn(target: HTMLElement, emptyTransfer = false, withDragStart = true) {
-  const card = within(column(storedTask.status)).getByText(storedTask.name).closest(".card-wrapper")!;
+  const card = screen.getAllByText(storedTask.name).find(element => element.closest(".card-wrapper"))!.closest(".card-wrapper")!;
   const dataTransfer = {
     setData: vi.fn(), getData: vi.fn(() => emptyTransfer ? "" : storedTask.id),
     effectAllowed: "move",
@@ -602,7 +610,8 @@ describe("拖入开发中列", () => {
     storedTask.prompt_json = "invalid old JSON";
     await renderBoard("done");
     dropOn(column("in_progress"));
-    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_task", expect.objectContaining({ promptText: "", taskId: storedTask.id })));
+    await waitFor(() => expect(invoke).toHaveBeenCalledWith("start_task", { taskId: storedTask.id, operationId: expect.any(String) }));
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "read_file_content")).toBe(false);
     await screen.findByText("已连接");
     expect(screen.queryByRole("heading", { name: /派发任务:/ })).toBeNull();
     expectNoStatusWrite();
@@ -615,7 +624,7 @@ describe("拖入开发中列", () => {
     dropOn(column("in_progress"));
     dropOn(column("in_progress"));
     await waitFor(() => expect(sendPrompt).toHaveBeenCalledTimes(1));
-    expect(invoke).toHaveBeenCalledWith("start_task", expect.objectContaining({ promptText: "请修复拖放派发" }));
+    expect(invoke).toHaveBeenCalledWith("start_task", { taskId: storedTask.id, operationId: expect.any(String) });
     expect(storedTask.status).toBe("todo");
     expect(screen.queryByRole("heading", { name: /派发任务:/ })).toBeNull();
     finish();
@@ -650,6 +659,60 @@ describe("拖入开发中列", () => {
 });
 
 describe("保留其他拖放与派发行为", () => {
+  it("启动仍未返回时卡片立即进入开发中且不阻塞新建任务", async () => {
+    sendPrompt.mockReturnValue(new Promise(() => {}));
+    await renderBoard();
+    dropOn(column("in_progress"));
+    expect(within(column("in_progress")).getByText(storedTask.name)).toBeTruthy();
+    expect(screen.getAllByText("窗口准备中…").length).toBeGreaterThan(0);
+    expect(vi.mocked(invoke).mock.calls.some(([command]) => command === "terminal_open")).toBe(false);
+    fireEvent.click(screen.getByRole("button", { name: /新建任务/ }));
+    expect(await screen.findByRole("dialog")).toBeTruthy();
+  });
+
+  it("受理后重新进入看板保留准备状态，就绪通知不抢回手动选择", async () => {
+    const original = vi.mocked(invoke).getMockImplementation()!;
+    vi.mocked(invoke).mockImplementation(async (command, args, options) => {
+      if (command === "start_task") {
+        const input = args as { operationId: string };
+        storedTask.flow = { session_id: null, operation_id: input.operationId, kind: "start", state: "pending",
+          error: "", pane_id: null, requested_status: "in_progress", stage: "starting_agent" };
+        return storedTask.flow;
+      }
+      return original(command, args, options);
+    });
+    await renderBoard();
+    dropOn(column("in_progress"));
+    await screen.findAllByText("正在启动或恢复 Agent…");
+    cleanup();
+    bindTask();
+    extraTasks = [{ ...storedTask, id: "other", name: "其他任务", status: "in_progress", flow: null }];
+    storedTask.binding = null;
+    await renderBoard();
+    expect(within(column("in_progress")).getByText(storedTask.name)).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "修复绑定" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "派发" })).toBeNull();
+    fireEvent.click(screen.getByText("其他任务"));
+    await screen.findByText("已连接");
+    bindTask(); storedTask.status = "in_progress"; storedTask.flow!.state = "succeeded";
+    await act(async () => { for (const callback of flowEvents) callback({ payload: {
+      project_id: project.id, task_id: storedTask.id, operation_id: storedTask.flow!.operation_id!
+    } }); });
+    await waitFor(() => expect(screen.getByRole("complementary").querySelector("strong")!.textContent).toBe("其他任务"));
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "start_task")).toHaveLength(1);
+  });
+
+  it("恢复焦点补查遗漏的启动完成事件并自动连接当前任务", async () => {
+    storedTask.flow = { session_id: null, operation_id: "pending-start", kind: "start", state: "pending",
+      error: "", pane_id: null, stage: "queued", requested_status: "in_progress" };
+    await renderBoard();
+    expect(screen.getAllByText("窗口准备中…").length).toBeGreaterThan(0);
+    bindTask(); storedTask.status = "in_progress"; storedTask.flow.state = "succeeded";
+    fireEvent(window, new Event("focus"));
+    await screen.findByText("已连接");
+    expect(vi.mocked(invoke).mock.calls.filter(([command]) => command === "start_task")).toHaveLength(0);
+  });
+
   it("预览和派发都保留技能调用，不读取技能正文", async () => {
     storedTask.prompt_json = JSON.stringify({ type: "doc", content: [
       { type: "paragraph", content: [

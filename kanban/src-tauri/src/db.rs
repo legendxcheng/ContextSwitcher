@@ -134,6 +134,15 @@ pub fn init(conn: &Connection) -> Result<()> {
         INSERT OR IGNORE INTO task_working_directories(task_id,cwd)
             SELECT t.id,COALESCE(s.cwd,p.root_path) FROM tasks t JOIN projects p ON p.id=t.project_id
             LEFT JOIN task_sessions s ON s.task_id=t.id WHERE EXISTS(SELECT 1 FROM task_bindings b WHERE b.task_id=t.id);")?;
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS start_requests (
+        operation_id TEXT PRIMARY KEY REFERENCES lifecycle_operations(id),
+        project_id TEXT NOT NULL, workspace TEXT NOT NULL, cwd TEXT NOT NULL,
+        prompt_json TEXT NOT NULL, needs_prompt INTEGER NOT NULL,
+        original_status TEXT NOT NULL, stage TEXT NOT NULL DEFAULT 'queued'
+    );
+    INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);",
+    )?;
     Ok(())
 }
 

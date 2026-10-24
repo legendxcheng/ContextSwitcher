@@ -2,6 +2,7 @@ mod commands;
 mod db;
 mod herdr;
 mod lifecycle;
+mod start;
 mod models;
 mod project_commands;
 mod projects;

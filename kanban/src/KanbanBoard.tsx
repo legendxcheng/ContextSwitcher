@@ -10,7 +10,8 @@ import { DispatchRecovery } from "./DispatchRecovery";
 import { TerminalPanel } from "./TerminalPanel";
 import { BindingDialog } from "./BindingDialog";
 import { tr, errorText } from "./i18n";
-import { resolveMentions } from "./dispatchUtils";
+import { flowUnresolved, taskColumn } from "./taskFlow";
+import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
 
 interface KanbanBoardProps {
   project: Project;
@@ -39,9 +40,10 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
   const [repairingTaskId, setRepairingTaskId] = useState<string | null>(null);
   const activeFlows = useRef(new Set<string>());
+  const optimisticStarts = useRef(new Map<string, Task["flow"]>());
   const [busyTasks, setBusyTasks] = useState(new Set<string>());
   const [flowError, setFlowError] = useState("");
-  const selectedTask = tasks.find((task) => task.id === selectedTaskId && task.status === "in_progress") ?? null;
+  const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskColumn(task) === "in_progress") ?? null;
   const suppressClick = useRef(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
   const resizing = useRef(false);
@@ -50,6 +52,8 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const [maximumWidth, setMaximumWidth] = useState(800);
   const loadSequence = useRef(0);
   const agentSequence = useRef(0);
+  const taskRequest = useRef<Promise<Task[]> | null>(null);
+  const mounted = useRef(true);
   useEffect(() => {
     if (!workspaceRef.current) return;
     const observer = new ResizeObserver(() => {
@@ -92,28 +96,36 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     const taskId = draggingIdRef.current ?? e.dataTransfer.getData("taskId");
     if (!taskId) return;
     const task = tasks.find((t) => t.id === taskId);
-    if (!task || activeFlows.current.has(taskId)) return;
+    if (!task || activeFlows.current.has(taskId) || flowUnresolved(task)) return;
     setPendingDispatch({ task, paneId: agent.pane_id });
   }
 
-  async function load() {
+  async function load(refreshDiscovery = true) {
+    if (!mounted.current) return;
+    if (refreshDiscovery) refreshAgents();
     const sequence = ++loadSequence.current;
     setLoading(true);
+    const request = !refreshDiscovery && taskRequest.current ? taskRequest.current : api.listTasks(project.id);
+    taskRequest.current = request;
     try {
-      const t = await api.listTasks(project.id);
+      const result = await request;
+      const t = result.map(task => optimisticStarts.current.has(task.id)
+        ? { ...task, flow: optimisticStarts.current.get(task.id) } : task);
       if (sequence === loadSequence.current) {
         setTasks(t);
-        setSelectedTaskId((current) => t.some((task) => task.id === current && task.status === "in_progress")
-          ? current : t.find((task) => task.status === "in_progress")?.id ?? null);
+        setSelectedTaskId((current) => t.some((task) => task.id === current && taskColumn(task) === "in_progress")
+          ? current : t.find((task) => taskColumn(task) === "in_progress")?.id ?? null);
       }
     } catch (e) {
       if (sequence === loadSequence.current) notify(errorText(e), "error");
     } finally {
+      if (taskRequest.current === request) taskRequest.current = null;
       if (sequence === loadSequence.current) setLoading(false);
     }
   }
 
-  useEffect(() => { load(); return () => { ++loadSequence.current; }; }, [project.id]);
+  useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [project.id]);
+  useTaskFlowUpdates(project.id, () => load(false));
 
   function handleArchived(id: string) {
     // Archive already committed: a failed list refresh must not resurrect this card.
@@ -156,23 +168,36 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     draggingIdRef.current = null;
     if (!taskId) return;
     const task = tasks.find((t) => t.id === taskId);
-    if (!task || task.status === targetStatus) return;
+    if (!task || taskColumn(task) === targetStatus) return;
     await moveTask(task, targetStatus);
   }
 
   async function moveTask(task: Task, status: TaskStatus) {
-    if (activeFlows.current.has(task.id)) return;
+    if (activeFlows.current.has(task.id) || (flowUnresolved(task) && !(status === "done" && task.flow?.kind === "complete" && task.flow.state === "unknown"))) return;
     activeFlows.current.add(task.id);
     setBusyTasks(new Set(activeFlows.current));
     setFlowError("");
+    const operationId = crypto.randomUUID();
+    if (status === "in_progress") {
+      const flow: Task["flow"] = { session_id: task.flow?.session_id ?? null, operation_id: operationId,
+        kind: "start", state: "pending", error: "", pane_id: null, stage: "queued", requested_status: "in_progress" };
+      optimisticStarts.current.set(task.id, flow);
+      ++loadSequence.current;
+      setTasks(current => current.map(t => t.id === task.id ? { ...t, flow } : t));
+      setSelectedTaskId(task.id);
+    }
     try {
-      const result = status === "in_progress"
-        ? await api.startTask(task.id, task.flow?.session_id || task.binding?.target ? "" : await resolveMentions(JSON.parse(task.prompt_json), project.root_path), crypto.randomUUID())
-        : await api.updateTaskStatus(task.id, status);
-      if (result?.warning) setFlowError(`${tr("flow.cleanup_warning")} ${errorText(result.warning)}`);
+      if (status === "in_progress") {
+        await api.startTask(task.id, operationId);
+      } else {
+        const result = await api.updateTaskStatus(task.id, status);
+        if (result?.warning) setFlowError(`${tr("flow.cleanup_warning")} ${errorText(result.warning)}`);
+      }
+      optimisticStarts.current.delete(task.id);
       await load();
-      if (status === "in_progress") setSelectedTaskId(task.id);
     } catch (e) {
+      optimisticStarts.current.delete(task.id);
+      setTasks(current => current.map(t => t.id === task.id ? { ...t, flow: task.flow } : t));
       setFlowError(errorText(e));
       await load();
     } finally {
@@ -208,7 +233,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
           <div className="board-toolbar">
             <div className="board-view"><Icon name="board" /><h2>任务看板</h2><span className="toolbar-count">{tasks.length}</span></div>
             <div className="board-toolbar-actions">
-              <span className="board-summary">{tasks.filter((task) => task.status === "done").length} / {tasks.length} 已完成</span>
+              <span className="board-summary">{tasks.filter((task) => taskColumn(task) === "done").length} / {tasks.length} 已完成</span>
               <button className="btn-primary" onClick={() => setCreatingTask(true)}><Icon name="plus" />新建任务<kbd>N</kbd></button>
             </div>
           </div>
@@ -235,7 +260,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
           )}
           <div className="kanban-columns">
           {COLUMNS.map(({ status, label, emptyIcon, emptyText, hint }) => {
-            const col = tasks.filter((t) => t.status === status);
+            const col = tasks.filter((t) => taskColumn(t) === status);
             return (
               <div
                 key={status}
@@ -263,7 +288,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                     {col.map((task) => (
                       <div
                         key={task.id}
-                        draggable={!busyTasks.has(task.id)}
+                        draggable={!busyTasks.has(task.id) && !flowUnresolved(task)}
                         onPointerDownCapture={(event) => {
                           dragFromControl.current = event.target instanceof Element && !!event.target.closest("button, input, select, textarea");
                         }}
@@ -282,12 +307,13 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                           task={task}
                           busy={busyTasks.has(task.id)}
                           onComplete={() => moveTask(task, "done")}
+                          onStart={() => moveTask(task, "in_progress")}
                           onFlowRecover={() => recoverFlow(task)}
                           onChanged={load}
                           onArchived={() => handleArchived(task.id)}
                           onRecover={() => setRecoveringTaskId(task.id)}
                           selected={selectedTaskId === task.id}
-                          onSelect={task.status === "in_progress" ? () => { if (!suppressClick.current) setSelectedTaskId(task.id); } : undefined}
+                          onSelect={taskColumn(task) === "in_progress" ? () => { if (!suppressClick.current) setSelectedTaskId(task.id); } : undefined}
                           onEditTask={setEditingTaskId}
                           onDispatchTask={(id) => {
                             const t = tasks.find((x) => x.id === id);

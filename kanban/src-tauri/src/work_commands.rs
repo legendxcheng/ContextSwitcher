@@ -1,18 +1,24 @@
 use crate::terminal::{Output, TerminalManager};
 use crate::{models::DispatchRecord, workflow::Workflow};
 use std::sync::Arc;
-use tauri::State;
+use tauri::{Emitter, State};
 
 #[tauri::command]
 pub async fn start_task(
     app: State<'_, Arc<Workflow>>,
+    handle: tauri::AppHandle,
     task_id: String,
-    prompt_text: String,
     operation_id: String,
-) -> Result<crate::lifecycle::Outcome, String> {
+) -> Result<crate::lifecycle::Flow, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
-        app.start_task(&task_id, &prompt_text, &operation_id)
+        app.submit_start(
+            &task_id,
+            &operation_id,
+            Arc::new(move |event| {
+                let _ = handle.emit("task-start-changed", event);
+            }),
+        )
     })
     .await
     .map_err(|e| e.to_string())?

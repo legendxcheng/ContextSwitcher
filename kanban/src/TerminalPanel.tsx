@@ -5,6 +5,7 @@ import "@xterm/xterm/css/xterm.css";
 import * as api from "./api";
 import type { Task } from "./types";
 import { tr, errorText } from "./i18n";
+import { preparationLabel } from "./taskFlow";
 import { terminalAppearance } from "./terminalAppearance";
 import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
 
@@ -15,9 +16,11 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
   const [attempt, setAttempt] = useState(0);
   const identity = JSON.stringify(task?.binding?.target);
   const bindingState = task?.binding?.state;
+  const preparation = task ? preparationLabel(task) : null;
   useEffect(() => {
     setError("");
     if (!task || !host.current) { setState("terminal.empty"); return; }
+    if (preparation) { setState(preparation); return; }
     if (bindingState !== "valid") { setState("binding.repair_required"); return; }
     const connectionId = crypto.randomUUID();
     let active = true;
@@ -94,14 +97,14 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
       void api.closeTerminal(connectionId).catch(() => {});
     };
   // Reconnect only when the selected identity/state changes, not on list refreshes.
-  }, [task?.id, identity, bindingState, attempt]);
+  }, [task?.id, identity, bindingState, attempt, preparation]);
 
   return <aside className="terminal-panel" aria-label={tr("terminal.label")}>
     <header className="terminal-header"><strong>{task?.name ?? tr("terminal.label")}</strong><span role="status">{tr(state)}</span></header>
     {!task && <p className="terminal-hint">{tr("terminal.empty")}</p>}
     {task && state !== "terminal.connected" && <div className="terminal-feedback">
       {error && <p role="alert">{error}</p>}
-      {state !== "terminal.connecting" && <div className="task-actions">
+      {!preparation && state !== "terminal.connecting" && <div className="task-actions">
         {bindingState === "valid" && <button className="btn-secondary" onClick={() => setAttempt((n) => n + 1)}>{tr("terminal.reconnect")}</button>}
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}
       </div>}

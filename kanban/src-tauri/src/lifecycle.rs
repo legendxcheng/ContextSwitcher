@@ -10,6 +10,8 @@ pub struct Flow {
     pub state: Option<String>,
     pub error: String,
     pub pane_id: Option<String>,
+    pub stage: Option<String>,
+    pub requested_status: Option<String>,
 }
 
 #[cfg(test)]
@@ -34,6 +36,7 @@ mod tests {
         mismatch: bool,
         send_error: bool,
         create_error: bool,
+        prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
     }
     #[derive(Default)]
     struct Fake(Mutex<State>);
@@ -87,6 +90,16 @@ mod tests {
             let mut s = self.0.lock().unwrap();
             s.prepared.push(resume.map(str::to_string));
             s.directories.push(cwd.into());
+            let gate = s.prepare_gate.clone();
+            drop(s);
+            if let Some(gate) = gate {
+                let (lock, wake) = &*gate;
+                let mut released = lock.lock().unwrap();
+                while !*released {
+                    released = wake.wait(released).unwrap();
+                }
+            }
+            let mut s = self.0.lock().unwrap();
             if s.prepare_error {
                 return Err("timeout".into());
             }
@@ -178,11 +191,239 @@ mod tests {
     fn op() -> String {
         uuid::Uuid::new_v4().to_string()
     }
+
+    #[test]
+    fn accepts_and_persists_start_without_waiting_for_herdr() {
+        let (app, fake) = fixture();
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        fake.0.lock().unwrap().prepare_gate = Some(gate.clone());
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET prompt_json=?1 WHERE id='a'",
+                [r#"{"type":"doc","content":[{"type":"text","text":"snapshot"}]}"#],
+            )
+            .unwrap();
+        let app = Arc::new(app);
+        let operation = op();
+        let accepted = app.submit_start("a", &operation, Arc::new(|_| {})).unwrap();
+        let tasks = crate::tasks::list(&app.db.lock().unwrap(), "p1").unwrap();
+        let duplicate = app.submit_start("a", &operation, Arc::new(|_| {})).unwrap();
+        let other = crate::tasks::update(
+            &app.db.lock().unwrap(),
+            "b",
+            "still editable",
+            "{}",
+            crate::models::TaskPriority::Normal,
+        );
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        assert_eq!(accepted.operation_id.as_deref(), Some(operation.as_str()));
+        assert_eq!(duplicate.operation_id, accepted.operation_id);
+        assert_eq!(tasks[0].status, crate::models::TaskStatus::Todo);
+        assert_eq!(
+            tasks[0].flow.as_ref().unwrap().requested_status.as_deref(),
+            Some("in_progress")
+        );
+        other.unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        while view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref() == Some("pending") {
+            assert!(std::time::Instant::now() < deadline);
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(status(&app, "a"), "in_progress");
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["snapshot"]);
+    }
     fn status(app: &Workflow, task: &str) -> String {
         app.project_context(task).unwrap().2
     }
     fn saved(app: &Workflow, task: &str) -> Option<String> {
         view(&app.db.lock().unwrap(), task).unwrap().session_id
+    }
+
+    fn await_start(app: &Workflow, task: &str) -> Flow {
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+        loop {
+            let flow = view(&app.db.lock().unwrap(), task).unwrap();
+            if flow.state.as_deref() != Some("pending") {
+                return flow;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "background start did not settle"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+    }
+
+    fn set_prompt(app: &Workflow, task: &str, text: &str) {
+        let json = serde_json::json!({"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":text}]}]}).to_string();
+        crate::tasks::update(
+            &app.db.lock().unwrap(),
+            task,
+            "Task",
+            &json,
+            crate::models::TaskPriority::Normal,
+        )
+        .unwrap();
+    }
+
+    #[test]
+    fn asynchronous_start_uses_accepted_content_and_directory_then_resumes_without_reading_prompt()
+    {
+        let (app, fake) = fixture();
+        let app = Arc::new(app);
+        set_prompt(&app, "a", "accepted content");
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        fake.0.lock().unwrap().prepare_gate = Some(gate.clone());
+        app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+        set_prompt(&app, "a", "later edit");
+        app.db
+            .lock()
+            .unwrap()
+            .execute("UPDATE projects SET root_path='changed' WHERE id='p1'", [])
+            .unwrap();
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["accepted content"]);
+        assert_eq!(fake.0.lock().unwrap().directories, vec!["."]);
+        let session = saved(&app, "a");
+        app.complete_task("a", &op()).unwrap();
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET prompt_json='invalid json' WHERE id='a'",
+                [],
+            )
+            .unwrap();
+        app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+        assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+        assert_eq!(saved(&app, "a"), session);
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["accepted content"]);
+    }
+
+    #[test]
+    fn invalid_content_fails_locally_and_next_valid_request_can_start() {
+        let (app, fake) = fixture();
+        let app = Arc::new(app);
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE tasks SET prompt_json='invalid json' WHERE id='a'",
+                [],
+            )
+            .unwrap();
+        let id = op();
+        app.submit_start("a", &id, Arc::new(|_| {})).unwrap();
+        let failed = await_start(&app, "a");
+        assert_eq!(failed.state.as_deref(), Some("failed"));
+        assert!(failed.requested_status.is_none());
+        assert_eq!(status(&app, "a"), "todo");
+        assert_eq!(fake.0.lock().unwrap().created, 0);
+        set_prompt(&app, "a", "fixed");
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE projects SET root_path='updated-directory' WHERE id='p1'",
+                [],
+            )
+            .unwrap();
+        // Retrying the old ID reports the original result instead of sending changed content.
+        assert_eq!(
+            app.submit_start("a", &id, Arc::new(|_| {}))
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("failed")
+        );
+        app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+        assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["fixed"]);
+        assert_eq!(
+            fake.0.lock().unwrap().directories,
+            vec!["updated-directory"]
+        );
+    }
+
+    #[test]
+    fn asynchronous_unknown_start_preserves_ownership_and_does_not_block_other_tasks() {
+        let (app, fake) = fixture();
+        let app = Arc::new(app);
+        set_prompt(&app, "a", "first");
+        set_prompt(&app, "b", "second");
+        fake.0.lock().unwrap().prepare_error = true;
+        let id = op();
+        app.submit_start("a", &id, Arc::new(|_| {})).unwrap();
+        let unknown = await_start(&app, "a");
+        assert_eq!(unknown.state.as_deref(), Some("unknown"));
+        assert_eq!(unknown.requested_status.as_deref(), Some("in_progress"));
+        assert!(app.submit_start("a", &op(), Arc::new(|_| {})).is_err());
+        assert_eq!(
+            app.submit_start("a", &id, Arc::new(|_| {}))
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("unknown")
+        );
+        fake.0.lock().unwrap().prepare_error = false;
+        app.submit_start("b", &op(), Arc::new(|_| {})).unwrap();
+        assert_eq!(await_start(&app, "b").state.as_deref(), Some("succeeded"));
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["second"]);
+        let pane = app.binding("a").unwrap().target.unwrap().pane_id;
+        fake.0.lock().unwrap().panes.remove(&pane);
+        app.recover_lifecycle("a", &id).unwrap();
+        app.submit_start("a", &op(), Arc::new(|_| {})).unwrap();
+        assert_eq!(await_start(&app, "a").state.as_deref(), Some("succeeded"));
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["second", "first"]);
+    }
+
+    #[test]
+    fn background_operation_survives_database_reopen_without_replay() {
+        let (app, fake) = fixture();
+        let app = Arc::new(app);
+        set_prompt(&app, "a", "only once");
+        let gate = Arc::new((Mutex::new(false), std::sync::Condvar::new()));
+        fake.0.lock().unwrap().prepare_gate = Some(gate.clone());
+        let id = op();
+        app.submit_start("a", &id, Arc::new(|_| {})).unwrap();
+        let path = std::env::temp_dir().join(format!("kanban-background-{}.db", op()));
+        app.db
+            .lock()
+            .unwrap()
+            .execute("VACUUM main INTO ?1", [path.to_str().unwrap()])
+            .unwrap();
+        *gate.0.lock().unwrap() = true;
+        gate.1.notify_all();
+        await_start(&app, "a");
+        drop(app);
+        let db = Connection::open(&path).unwrap();
+        crate::db::init(&db).unwrap();
+        crate::db::recover_interrupted(&db).unwrap();
+        let app = Arc::new(Workflow {
+            db: Arc::new(Mutex::new(db)),
+            herdr: fake.clone(),
+        });
+        assert_eq!(
+            app.submit_start("a", &id, Arc::new(|_| {}))
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("unknown")
+        );
+        let tasks = crate::tasks::list(&app.db.lock().unwrap(), "p1").unwrap();
+        assert_eq!(
+            tasks[0].flow.as_ref().unwrap().requested_status.as_deref(),
+            Some("in_progress")
+        );
+        assert_eq!(fake.0.lock().unwrap().sent, vec!["only once"]);
+        assert!(app.submit_start("a", &op(), Arc::new(|_| {})).is_err());
+        drop(app);
+        std::fs::remove_file(path).unwrap();
     }
 
     #[test]
@@ -485,11 +726,27 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
         state: None,
         error: String::new(),
         pane_id: None,
+        stage: None,
+        requested_status: None,
     };
     let op: Option<(String,String,String,String,Option<String>)> = db.query_row(
         "SELECT id,kind,state,error,target_json FROM lifecycle_operations WHERE task_id=?1 ORDER BY rowid DESC LIMIT 1",
         [task], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?,r.get(3)?,r.get(4)?))).optional().map_err(err)?;
     if let Some((id, kind, state, error, json)) = op {
+        flow.stage = db
+            .query_row(
+                "SELECT stage FROM start_requests WHERE operation_id=?1",
+                [&id],
+                |r| r.get(0),
+            )
+            .optional()
+            .map_err(err)?;
+        if flow.stage.is_some() && state == "succeeded" {
+            flow.stage = Some("ready".into());
+        }
+        if flow.stage.is_some() && matches!(state.as_str(), "pending" | "unknown") {
+            flow.requested_status = Some("in_progress".into());
+        }
         flow.operation_id = Some(id);
         flow.kind = Some(kind);
         flow.state = Some(state);
@@ -503,6 +760,49 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
     Ok(flow)
 }
 
+pub(crate) fn begin_flow_in(
+    db: &Connection,
+    task: &str,
+    id: &str,
+    kind: &str,
+) -> Result<bool, String> {
+    if uuid::Uuid::parse_str(id).is_err() {
+        return Err("dispatch.operation_required".into());
+    }
+    crate::tasks::ensure_active(db, task)?;
+    let old: Option<(String, String, String)> = db
+        .query_row(
+            "SELECT task_id,kind,state FROM lifecycle_operations WHERE id=?1",
+            [id],
+            |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
+        )
+        .optional()
+        .map_err(err)?;
+    if let Some((owner, old_kind, state)) = old {
+        if owner != task || old_kind != kind {
+            return Err("dispatch.operation_conflict".into());
+        }
+        return if state == "succeeded" {
+            Ok(false)
+        } else {
+            Err("flow.verify_required".into())
+        };
+    }
+    // A close interrupted by process death can be retried after rechecking the exact pane.
+    if kind == "complete" {
+        db.execute("UPDATE lifecycle_operations SET state='failed' WHERE task_id=?1 AND kind='complete' AND state='unknown'",[task]).map_err(err)?;
+    }
+    ensure_idle(db, task, None)?;
+    if binding(db, task)?.operation.is_some() {
+        return Err("dispatch.verify_required".into());
+    }
+    db.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,created_at) VALUES (?1,?2,?3,'pending',?4)",params![id,task,kind,now()]).map_err(err)?;
+    if kind == "start" {
+        db.execute("INSERT OR IGNORE INTO task_working_directories(task_id,cwd) SELECT t.id,COALESCE(s.cwd,p.root_path) FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id WHERE t.id=?1",[task]).map_err(err)?;
+    }
+    Ok(true)
+}
+
 impl Workflow {
     fn project_context(&self, task: &str) -> Result<(String, String, String), String> {
         let db = self.db.lock().map_err(err)?;
@@ -512,46 +812,13 @@ impl Workflow {
             [task], |r|Ok((workspace,r.get(0)?,r.get(1)?))).map_err(err)
     }
     fn begin_flow(&self, task: &str, id: &str, kind: &str) -> Result<bool, String> {
-        if uuid::Uuid::parse_str(id).is_err() {
-            return Err("dispatch.operation_required".into());
-        }
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
-        crate::tasks::ensure_active(&tx, task)?;
-        let old: Option<(String, String, String)> = tx
-            .query_row(
-                "SELECT task_id,kind,state FROM lifecycle_operations WHERE id=?1",
-                [id],
-                |r| Ok((r.get(0)?, r.get(1)?, r.get(2)?)),
-            )
-            .optional()
-            .map_err(err)?;
-        if let Some((owner, old_kind, state)) = old {
-            if owner != task || old_kind != kind {
-                return Err("dispatch.operation_conflict".into());
-            }
-            return if state == "succeeded" {
-                Ok(false)
-            } else {
-                Err("flow.verify_required".into())
-            };
-        }
-        // A close interrupted by process death can be retried after rechecking the exact pane.
-        if kind == "complete" {
-            tx.execute("UPDATE lifecycle_operations SET state='failed' WHERE task_id=?1 AND kind='complete' AND state='unknown'",[task]).map_err(err)?;
-        }
-        ensure_idle(&tx, task, None)?;
-        if binding(&tx, task)?.operation.is_some() {
-            return Err("dispatch.verify_required".into());
-        }
-        tx.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,created_at) VALUES (?1,?2,?3,'pending',?4)",params![id,task,kind,now()]).map_err(err)?;
-        if kind == "start" {
-            tx.execute("INSERT OR IGNORE INTO task_working_directories(task_id,cwd) SELECT t.id,COALESCE(s.cwd,p.root_path) FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id WHERE t.id=?1",[task]).map_err(err)?;
-        }
+        let started = begin_flow_in(&tx, task, id, kind)?;
         tx.commit().map_err(err)?;
-        Ok(true)
+        Ok(started)
     }
-    fn end_flow(&self, id: &str, state: &str, error: &str) -> Result<(), String> {
+    pub(crate) fn end_flow(&self, id: &str, state: &str, error: &str) -> Result<(), String> {
         self.db
             .lock()
             .map_err(err)?
@@ -561,6 +828,18 @@ impl Workflow {
             )
             .map_err(err)?;
         Ok(())
+    }
+    /// A known pre-external failure must not freeze an unused working directory for a retry.
+    pub(crate) fn fail_unstarted(&self, task: &str, op: &str, error: &str) -> Result<(), String> {
+        let mut db = self.db.lock().map_err(err)?;
+        let tx = db.transaction().map_err(err)?;
+        let updated = tx.execute("UPDATE lifecycle_operations SET state='failed',error=?3 WHERE id=?1 AND task_id=?2 AND state='pending'",
+            params![op, task, error]).map_err(err)?;
+        if updated != 1 {
+            return Err("dispatch.operation_conflict".into());
+        }
+        tx.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_bindings WHERE task_id=?1) AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)", [task]).map_err(err)?;
+        tx.commit().map_err(err)
     }
     fn reserve_target(&self, task: &str, op: &str, target: &Target) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
@@ -619,13 +898,31 @@ impl Workflow {
         .map_err(err)?;
         tx.commit().map_err(err)
     }
+    #[cfg(test)]
     pub fn start_task(&self, task: &str, prompt: &str, op: &str) -> Result<Outcome, String> {
         if !self.begin_flow(task, op, "start")? {
             return Ok(Outcome::default());
         }
+        self.run_start(task, prompt, op, None, &|_| Ok(()))
+    }
+    pub(crate) fn run_start(
+        &self,
+        task: &str,
+        prompt: &str,
+        op: &str,
+        context: Option<(String, String)>,
+        progress: &dyn Fn(&str) -> Result<(), String>,
+    ) -> Result<Outcome, String> {
         let mut touched = false;
         let result = (|| {
-            let (workspace, cwd, _) = self.project_context(task)?;
+            let (workspace, cwd) = match context {
+                Some(context) => context,
+                None => {
+                    let (workspace, cwd, _) = self.project_context(task)?;
+                    (workspace, cwd)
+                }
+            };
+            progress("preparing_window")?;
             let b = self.binding(task)?;
             let saved = view(&*self.db.lock().map_err(err)?, task)?.session_id;
             // A retained task pane (e.g. completion without a session ID) still owns its conversation.
@@ -677,6 +974,7 @@ impl Workflow {
                 }
             };
             touched = true;
+            progress("starting_agent")?;
             let live = self.herdr.prepare_codex(
                 &target,
                 &cwd,
@@ -694,6 +992,7 @@ impl Workflow {
                 )
                 .map_err(err)?;
             if saved.is_none() {
+                progress("dispatching")?;
                 self.dispatch_inner(
                     task,
                     &live.pane_id,
@@ -708,9 +1007,10 @@ impl Workflow {
             Ok(Outcome::default())
         })();
         if let Err(ref e) = result {
-            self.end_flow(op, if touched { "unknown" } else { "failed" }, e)?;
-            if !touched {
-                self.db.lock().map_err(err)?.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_bindings WHERE task_id=?1) AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)",[task]).map_err(err)?;
+            if touched {
+                self.end_flow(op, "unknown", e)?;
+            } else {
+                self.fail_unstarted(task, op, e)?;
             }
         }
         result

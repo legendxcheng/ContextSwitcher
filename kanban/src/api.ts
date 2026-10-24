@@ -1,4 +1,5 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
+import { listen } from "@tauri-apps/api/event";
 import type {
   Project, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
@@ -22,8 +23,11 @@ export const updateTask = (id: string, name: string, promptJson: string, priorit
 export const updateTaskStatus = (id: string, status: string) =>
   status === "done" ? completeTask(id, crypto.randomUUID()) : invoke<FlowOutcome>("update_task_status", { id, status });
 export interface FlowOutcome { warning?: string | null }
-export const startTask = (taskId: string, promptText: string, operationId: string) =>
-  invoke<FlowOutcome>("start_task", { taskId, promptText, operationId });
+export const startTask = (taskId: string, operationId: string) =>
+  invoke<NonNullable<Task["flow"]>>("start_task", { taskId, operationId });
+export interface StartChanged { project_id: string; task_id: string; operation_id: string }
+export const onStartChanged = (onChange: (event: StartChanged) => void) =>
+  listen<StartChanged>("task-start-changed", event => onChange(event.payload));
 export const completeTask = (taskId: string, operationId: string) =>
   invoke<FlowOutcome>("complete_task", { taskId, operationId });
 export const recoverLifecycle = (taskId: string, operationId: string) =>
