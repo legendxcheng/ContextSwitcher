@@ -128,6 +128,11 @@ pub fn delete(db: &mut Connection, id: &str) -> Result<(), String> {
 
 pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {
     let tx = db.transaction().map_err(err)?;
+    archive_in_transaction(&tx, id)?;
+    tx.commit().map_err(err)
+}
+
+fn archive_in_transaction(tx: &Connection, id: &str) -> Result<(), String> {
     let (status, archived): (String, bool) = tx
         .query_row(
             "SELECT status,archived_at IS NOT NULL FROM tasks WHERE id=?1",
@@ -143,12 +148,12 @@ pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {
     if status != "done" {
         return Err("archive.only_done".into());
     }
-    crate::lifecycle::ensure_idle(&tx, id, None)?;
+    crate::lifecycle::ensure_idle(tx, id, None)?;
     let pending: bool = tx.query_row("SELECT EXISTS(SELECT 1 FROM dispatch_operations WHERE task_id=?1 AND state IN ('pending','unknown'))", [id], |r| r.get(0)).map_err(err)?;
     if pending {
         return Err("dispatch.verify_required".into());
     }
-    if cleanup_required(&tx, id)? {
+    if cleanup_required(tx, id)? {
         return Err("archive.cleanup_required".into());
     }
     tx.execute(
@@ -158,7 +163,103 @@ pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {
     .map_err(err)?;
     tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [id])
         .map_err(err)?;
-    tx.commit().map_err(err)
+    Ok(())
+}
+
+#[derive(Clone, Copy)]
+pub enum CompletedTaskAction {
+    Archive,
+    Delete,
+}
+
+#[derive(Default, serde::Serialize)]
+pub struct BatchTaskResult {
+    pub succeeded: Vec<String>,
+    pub skipped: Vec<BatchTaskIssue>,
+    pub failed: Vec<BatchTaskIssue>,
+}
+
+#[derive(serde::Serialize)]
+pub struct BatchTaskIssue {
+    pub id: String,
+    pub error: String,
+}
+
+/// The caller holds the database lock. Each task has its own transaction so a
+/// failed write cannot roll back the other tasks or bypass their scope checks.
+pub fn remove_completed(
+    db: &mut Connection,
+    project: &str,
+    ids: &[String],
+    action: CompletedTaskAction,
+) -> BatchTaskResult {
+    let mut result = BatchTaskResult::default();
+    let mut seen = std::collections::HashSet::new();
+    for id in ids {
+        if !seen.insert(id) {
+            continue;
+        }
+        match remove_completed_item(db, project, id, action) {
+            Ok(true) => result.succeeded.push(id.clone()),
+            Ok(false) => result.skipped.push(BatchTaskIssue {
+                id: id.clone(),
+                error: "batch.task_changed".into(),
+            }),
+            Err(error) => {
+                let blocked = matches!(
+                    error.as_str(),
+                    "flow.verify_required"
+                        | "dispatch.verify_required"
+                        | "archive.cleanup_required"
+                );
+                let issue = BatchTaskIssue {
+                    id: id.clone(),
+                    error,
+                };
+                if blocked {
+                    result.skipped.push(issue);
+                } else {
+                    result.failed.push(issue);
+                }
+            }
+        }
+    }
+    result
+}
+
+fn remove_completed_item(
+    db: &mut Connection,
+    project: &str,
+    id: &str,
+    action: CompletedTaskAction,
+) -> Result<bool, String> {
+    let tx = db.transaction().map_err(err)?;
+    let in_scope: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM tasks WHERE id=?1 AND project_id=?2 AND status='done' AND archived_at IS NULL)",
+        params![id, project], |row| row.get(0),
+    ).map_err(err)?;
+    if !in_scope {
+        return Ok(false);
+    }
+    // An accepted background start projects a done task into in_progress before
+    // its persisted status changes. Mirror that projection under this transaction.
+    let starting: bool = tx.query_row(
+        "SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN start_requests r ON r.operation_id=o.id
+         WHERE o.task_id=?1 AND o.kind='start' AND o.state IN ('pending','unknown'))",
+        [id], |row| row.get(0),
+    ).map_err(err)?;
+    if starting {
+        return Ok(false);
+    }
+    match action {
+        CompletedTaskAction::Archive => archive_in_transaction(&tx, id)?,
+        CompletedTaskAction::Delete => {
+            tx.execute("DELETE FROM tasks WHERE id=?1", [id])
+                .map_err(err)?;
+        }
+    }
+    tx.commit().map_err(err)?;
+    Ok(true)
 }
 
 // A later failed start must not conceal a previous unfinished completion.
@@ -166,6 +267,10 @@ fn cleanup_required(db: &Connection, id: &str) -> Result<bool, String> {
     db.query_row("SELECT state IN ('failed','unknown') FROM lifecycle_operations WHERE task_id=?1 AND kind='complete' ORDER BY rowid DESC LIMIT 1",
         [id], |row| row.get(0)).optional().map(|value| value.unwrap_or(false)).map_err(err)
 }
+
+#[cfg(test)]
+#[path = "completed_task_tests.rs"]
+mod completed_tests;
 
 #[cfg(test)]
 mod tests {

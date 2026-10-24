@@ -61,6 +61,7 @@ beforeEach(() => {
     const input = args as Record<string, string>;
     switch (command) {
       case "list_projects": return [];
+      case "project_git_statuses": return (args as { projectIds: string[] }).projectIds.map(project_id => ({ project_id, root_path: project.root_path, state: "branch", head: "feature/fixture" }));
       case "list_tasks": return [...(board.deleted ? [] : [{ ...board.storedTask }]), ...board.extraTasks];
       case "delete_task": board.deleted = true; return;
       case "archive_task": board.deleted = true; return;

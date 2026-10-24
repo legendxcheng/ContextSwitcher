@@ -48,6 +48,7 @@ mod tests {
             terminal_id: "term-a".into(),
             agent: "codex".into(),
             process_id: "100:200".into(),
+            codex_resume_locks: Vec::new(),
             title: "A".into(),
             status: "idle".into(),
         };

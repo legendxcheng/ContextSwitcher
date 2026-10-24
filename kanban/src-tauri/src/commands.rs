@@ -135,56 +135,70 @@ pub fn delete_task(
     Ok(())
 }
 
-// ── File & Skill Discovery ────────────────────────────────────────────────────
-
-#[derive(serde::Serialize)]
-pub struct FileEntry {
-    pub rel_path: String,
-    pub abs_path: String,
+#[tauri::command]
+pub async fn archive_completed_tasks(
+    state: State<'_, DbState>,
+    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
+    project_id: String,
+    task_ids: Vec<String>,
+) -> Result<crate::tasks::BatchTaskResult, String> {
+    remove_completed_tasks(
+        state.0.clone(),
+        terminals.inner().clone(),
+        project_id,
+        task_ids,
+        crate::tasks::CompletedTaskAction::Archive,
+    )
+    .await
 }
 
 #[tauri::command]
-pub fn search_files(root_path: String, query: String) -> Result<Vec<FileEntry>, String> {
-    let root = Path::new(&root_path);
-    if !root.exists() {
-        return Err(format!("Path does not exist: {root_path}"));
-    }
-    let q = query.to_lowercase();
-    let mut results: Vec<FileEntry> = WalkDir::new(root)
-        .follow_links(false)
-        .into_iter()
-        .filter_map(|e| e.ok())
-        .filter(|e| e.file_type().is_file())
-        .filter(|e| {
-            // skip common noise dirs
-            !e.path().components().any(|c| {
-                matches!(
-                    c.as_os_str().to_string_lossy().as_ref(),
-                    "node_modules" | ".git" | "target" | "__pycache__" | ".venv" | "dist" | "build"
-                )
-            })
-        })
-        .filter(|e| {
-            let name = e.file_name().to_string_lossy().to_lowercase();
-            q.is_empty() || name.contains(&q)
-        })
-        .take(50)
-        .map(|e| {
-            let abs = e.path().to_string_lossy().replace('\\', "/");
-            let rel = e
-                .path()
-                .strip_prefix(root)
-                .unwrap_or(e.path())
-                .to_string_lossy()
-                .replace('\\', "/");
-            FileEntry {
-                rel_path: rel,
-                abs_path: abs,
-            }
-        })
-        .collect();
-    results.sort_by(|a, b| a.rel_path.cmp(&b.rel_path));
-    Ok(results)
+pub async fn delete_completed_tasks(
+    state: State<'_, DbState>,
+    terminals: State<'_, Arc<crate::terminal::TerminalManager>>,
+    project_id: String,
+    task_ids: Vec<String>,
+) -> Result<crate::tasks::BatchTaskResult, String> {
+    remove_completed_tasks(
+        state.0.clone(),
+        terminals.inner().clone(),
+        project_id,
+        task_ids,
+        crate::tasks::CompletedTaskAction::Delete,
+    )
+    .await
+}
+
+async fn remove_completed_tasks(
+    db: Arc<Mutex<Connection>>,
+    terminals: Arc<crate::terminal::TerminalManager>,
+    project_id: String,
+    task_ids: Vec<String>,
+    action: crate::tasks::CompletedTaskAction,
+) -> Result<crate::tasks::BatchTaskResult, String> {
+    tauri::async_runtime::spawn_blocking(move || {
+        let mut conn = db.lock().map_err(|e| e.to_string())?;
+        let result = crate::tasks::remove_completed(&mut conn, &project_id, &task_ids, action);
+        drop(conn);
+        for id in &result.succeeded {
+            terminals.close_task(id);
+        }
+        Ok(result)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+// ── File & Skill Discovery ────────────────────────────────────────────────────
+
+#[tauri::command]
+pub async fn search_files(
+    root_path: String,
+    query: String,
+) -> Result<Vec<crate::file_search::FileEntry>, String> {
+    tauri::async_runtime::spawn_blocking(move || crate::file_search::search(root_path, query))
+        .await
+        .map_err(|error| error.to_string())?
 }
 
 #[derive(serde::Serialize)]

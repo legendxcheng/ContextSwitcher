@@ -2,9 +2,13 @@
 
 2026-10-24 图片输入增量：新建/编辑任务支持剪贴板图片、120px 缩略图、悬停删除及点击放大；图片持久化与两种派发路径见 6.3.1。实际通过的验证及原生 Ctrl+V 未覆盖项见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
-更新日期：2026-10-24（新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-24（修复拖入任务后 Codex 首次回车未提交；新增 Workspace Git 分支显示；新增 Workspace 拖动与 Herdr 双向排序；新增 @ 文件相关性排序、忽略规则与路径/模糊查询；新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 2026-10-24 本次增量：自动启动的任务共用对应 workspace 的 `kanban` Tab，各自独占 pane；并发分配与创建结果核实见 6.6 节，验证见[共用 Tab 验证记录](docs/verification/2026-10-24-kanban-shared-tab.md)。
+
+2026-10-24 Codex 权限增量：看板新建及恢复会话默认传入 `--approve-for-me`；自动审批的辅助会话写锁采用启动时证据核验，支持无新消息完成及数据库重开。实现、真实 Herdr 验证及边界见 6.6 节和 [Approve For Me 验证记录](docs/verification/2026-10-24-kanban-approve-for-me.md)。
+
+2026-10-24 已完成区域增量：列标题新增一键归档和一键删除，固定处理点击时当前项目已完成卡片的 ID 快照，逐项事务复核并返回成功、跳过与失败结果。实现见 6.2.1.1 节，验证与原生桌面限制见[批量操作验收记录](docs/verification/2026-10-24-kanban-completed-bulk.md)。
 
 ## 1. 项目定位与架构边界
 
@@ -30,6 +34,7 @@ flowchart LR
     CMD --> FILE[项目文件与项目/用户技能目录]
     CMD --> PS[projects.rs：同步与创建恢复]
     PS --> CLI
+    PS --> SOCKET[Herdr Socket：workspace.move_block]
     CMD --> CLI[Herdr CLI 子进程]
     CLI --> AGENT[已有 Agent pane]
     CMD --> WF[workflow.rs：独占绑定与派发]
@@ -59,9 +64,10 @@ kanban/
 │  ├─ api.ts                       Tauri IPC 及启动变化事件适配层
 │  ├─ taskFlow.ts                  启动投影列、未决守卫及准备文案
 │  ├─ useTaskFlowUpdates.ts         启动事件、前台 2 秒及焦点对账
-│  ├─ ProjectSidebar.tsx           项目列表和管理入口
+│  ├─ ProjectSidebar.tsx           项目列表、Workspace 拖动排序和管理入口
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
-│  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步，请求合并
+│  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
+│  ├─ useProjectGitStatus.ts       独立 Git 状态刷新、查询合并及项目/路径响应隔离
 │  ├─ WorkspaceRecovery.tsx        未决 workspace 创建核实与显式认领
 │  ├─ board-tests/                 按导航、表单、删除归档、状态、选择、派发与后台启动分组的组件回归；fixtures 隔离每个用例
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
@@ -77,6 +83,7 @@ kanban/
 │  ├─ imageInput.test.tsx          图片表单、撤销、多图顺序及预览回归
 │  ├─ MentionNode.ts              自定义原子行内 mention 节点
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
+│  ├─ fileDiscovery.test.tsx        @ 文件候选防抖、迟到响应、项目隔离及引用选择回归
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
 │  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次
 │  ├─ terminalScroll.ts           连接级滚轮换算、有界队列、字符区命中与失效清理
@@ -98,8 +105,11 @@ kanban/
 │     ├─ db.rs                     数据路径、建表、轻量迁移
 │     ├─ models.rs                 Rust 模型及状态转换
 │     ├─ commands.rs               CRUD/归档 IPC、文件/技能和 CS 数据读取
+│     ├─ file_search.rs            @ 文件发现：忽略规则、目录剪枝、显式子树与相关性前 50 条
+│     ├─ file_search_tests.rs      临时副本、排序截断、忽略规则及路径/模糊查询回归
 │     ├─ skill_discovery_tests.rs  项目/用户技能发现、优先级、去重与截取回归
-│     ├─ tasks.rs                  任务存储、优先级排序、归档事务及活跃任务守卫
+│     ├─ tasks.rs                  任务存储、优先级排序、归档事务、已完成批量处理及活跃任务守卫
+│     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
@@ -112,8 +122,14 @@ kanban/
 │     ├─ workflow_tests/           独占、派发恢复、任务变更互斥与显式 live 场景
 │     ├─ herdr.rs                  Cli/Herdr 对外适配、目标身份核验及 workspace/pane 操作
 │     ├─ herdr_cli.rs              无 shell 的有界进程执行、输出及响应错误分类
+│     ├─ herdr_socket.rs           有界 JSONL 重排请求、Windows 管道/Unix socket、响应与管道回归
+│     ├─ projects.rs / project_commands.rs  Workspace 同步、创建恢复及拖动重排服务/IPC
+│     ├─ project_git.rs / project_git_tests.rs  有界只读 Git 分支查询及真实临时仓库回归
+│     ├─ project_reorder_tests.rs  SQLite 排序、未知结果读回、重开与失败恢复回归
 │     ├─ herdr_workspace.rs        session 文件定位与只读 workspace 目录元数据
-│     ├─ herdr_codex.rs            Codex 新建、精确恢复、身份读取与 Windows 单次提交
+│     ├─ herdr_codex.rs            Codex 默认自动审批、新建、精确恢复、身份读取及提交路由
+│     ├─ herdr_codex_submit.rs     Windows 正文/粘贴边界/候选关闭/单次 Enter 与有界提交核验
+│     ├─ codex_process.rs          Windows 进程写锁观测、恢复启动证据及会话切换拒绝
 │     ├─ shared_tab.rs             查找唯一 kanban Tab、选择分屏位置及真实拓扑回归
 │     ├─ pane_allocation.rs        同 workspace 分配互斥、创建前快照与未知结果隔离
 │     └─ terminal.rs               Herdr JSONL 控制流、输入与安全释放
@@ -134,7 +150,7 @@ kanban/
 
 ### 2.2 构建与平台
 
-前端声明使用 React 19、Tiptap 3、TypeScript 6、Vite 8；Rust 使用 Tauri 2、rusqlite 0.32（bundled SQLite）、serde、uuid、chrono、walkdir 和 rfd。声明范围与实际锁定版本应分别查看 `package.json` 和 lockfile。
+前端声明使用 React 19、Tiptap 3、TypeScript 6、Vite 8；Rust 使用 Tauri 2、rusqlite 0.32（bundled SQLite）、serde、uuid、chrono、walkdir、ignore 和 rfd。声明范围与实际锁定版本应分别查看 `package.json` 和 lockfile。
 
 `tauri.conf.json` 配置窗口为 1280×800，最小 900×600，标题为 Herdr Kanban。`dragDropEnabled: false` 配合当前 HTML 拖放实现，不能误当成“应用不支持拖拽”。Vite 固定端口 1420，设置 `TAURI_DEV_HOST` 时另用 1421 提供 HMR。
 
@@ -184,8 +200,10 @@ flowchart TD
 
 | 模块 | 拥有的状态/职责 | 与外部的交互 |
 | --- | --- | --- |
-| [App.tsx](kanban/src/App.tsx) | `projects`、`selectedId`；从列表派生当前项目 | `listProjects`；把刷新函数下传侧栏 |
-| [ProjectSidebar.tsx](kanban/src/ProjectSidebar.tsx) | 新建弹窗开关、编辑目标 | 删除前确认；完成 CRUD 后通知 App 重载 |
+| [App.tsx](kanban/src/App.tsx) | `selectedId`；从同步列表派生当前项目 | 将同步、排序状态与操作下传侧栏；按 Project ID 保持看板 |
+| [useProjectSync.ts](kanban/src/useProjectSync.ts) | 项目、session、未决记录、刷新及排序状态 | 请求合并；重排前后增加代次，隔离旧刷新；失败只读回实际顺序 |
+| [useProjectGitStatus.ts](kanban/src/useProjectGitStatus.ts) | 独立于 Herdr 的项目 Git 状态 | 启动、目录变化及已有刷新触发查询；串行合并在途请求，拒绝迟到结果 |
+| [ProjectSidebar.tsx](kanban/src/ProjectSidebar.tsx) | 新建弹窗、编辑目标、拖动来源与插入位置 | 当前 session 的 ready 项可拖；松手提交稳定 ID 和下一项锚点；完成 CRUD 后刷新 |
 | [ProjectFormDialog.tsx](kanban/src/ProjectFormDialog.tsx) | 名称、目录、workspace ID、操作 ID、保存状态和错误 | 创建/关联/改名、回退目录、未知结果核实 |
 | [KanbanBoard.tsx](kanban/src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
 | [TaskCard.tsx](kanban/src/TaskCard.tsx) | 展示名称、实时状态圆点、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
@@ -233,6 +251,8 @@ flowchart TD
 
 创建在后端校验名称与有效目录，正式关联只接受在线存在的 workspace ID；显式重新关联拒绝改写活跃绑定或未决操作。
 
+侧栏分支使用独立瞬时投影 `ProjectGitStatus`：`project_id`、`root_path`、`state`（branch / detached / not_repository / unavailable）及可空 `head`（分支名或短提交号）。该投影通过独立 IPC 查询，在前端内存中按项目和路径匹配；不写入 Project 或 SQLite，不新增数据库迁移。
+
 ### 4.2 Task
 
 | 字段组 | 作用 |
@@ -251,7 +271,7 @@ flowchart TD
 
 | 表 | 约束及用途 |
 | --- | --- |
-| `task_bindings` | task_id 主键；`UNIQUE(session,pane_id)` 跨项目保障独占；保存完整目标身份和 valid/reserved 状态 |
+| `task_bindings` | task_id 主键；`UNIQUE(session,pane_id)` 跨项目保障独占；保存完整目标身份和 valid/reserved 状态。Target JSON 的可选 `codex_resume_locks` 保存本应用精确恢复新进程时观测的写锁集合；旧 JSON 省略时反序列化为空，无数据库迁移 |
 | `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
 | `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
 | `start_requests` | 启动操作快照：项目/workspace、目录、提示词文档、是否需要首次派发、原状态及阶段；按操作 ID 关联生命周期记录 |
@@ -283,6 +303,8 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | --- | --- | --- |
 | `list_projects` | 无 | 缓存导航 `Project[]`；按持久化 workspace 顺序排序，隐藏已确认 missing 的关联项目 |
 | `sync_projects` | 无 | 同步当前 session 后返回与缓存相同规则的可见 Project、在线 workspace、未决操作快照；完整记录仍在数据库保留 |
+| `project_git_statuses` | projectIds | 后端解析可见项目当前目录，在释放数据库锁后只读查询 Git，返回 ProjectGitStatus[]；不依赖 Herdr 在线 |
+| `move_project` | projectId、可空 beforeProjectId | 验证 session/在线身份，调用 Herdr 原子移动单个 Workspace；按权威结果更新原顺序缓存并返回 Snapshot |
 | `workspace_operations` | 无 | 当前 session 未决创建记录 |
 | `create_project` | name、rootPath、operationId | 先记录意图，再创建 Herdr workspace、核实并关联 Project |
 | `recover_workspace` | operationId、可选 workspaceId | 只核实/认领实际创建结果，不重新创建 |
@@ -302,7 +324,9 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `recover_lifecycle` | taskId、operationId | 只核实未知启动，不发送/启动/关闭；确认已派发或精确恢复，或确认启动 pane 已不存在后释放 |
 | `delete_task` | id | 本地事务删除卡片，允许未决操作；级联释放绑定/会话/目录，保留操作事实，关闭本应用查看连接 |
 | `archive_task` | id | 仅 done 且无未决操作/清理时归档；事务释放独占绑定，保留历史，关闭本应用查看连接 |
-| `search_files` | rootPath、query | 最多 50 个 FileEntry |
+| `archive_completed_tasks` | projectId、taskIds | 后台逐项归档快照中仍属于当前项目已完成列的任务，沿用单项归档守卫；返回 succeeded ID[]、skipped/failed {id,error}[] |
+| `delete_completed_tasks` | projectId、taskIds | 后台逐项删除快照中仍属于当前项目已完成列的任务；允许异常完成/派发状态，保留操作审计；返回同上 |
+| `search_files` | rootPath、query | 后台扫描忽略规则过滤后的候选，按相关性返回最多 50 个 FileEntry |
 | `search_skills` | query、可选 rootPath | 项目优先，排序/去重后匹配，最多 30 个 SkillEntry；省略目录仅搜索用户技能 |
 | `read_file_content` | absPath | UTF-8 文件全文 |
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
@@ -338,6 +362,26 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部调用不持 SQLite Mutex，短事务提交结果。本地删除保留排除记录，不关闭外部资源。旧 ContextSwitcher 读取 IPC、类型和表单入口均已移除。
 
+### 6.1.1 Workspace 拖动与双向排序（2026-10-24）
+
+`ProjectSidebar → useProjectSync.move → move_project → ProjectService::move_project → Cli::move_workspace → workspace.move_block`。当前 session 中 ready 且已关联的项目行支持原生 HTML 拖放，显示上/下插入线；排除编辑/删除操作，使用独立拖动来源引用及 MIME，外来文件或任务拖放不触发排序。来源按 Project ID 保持，松手发送 source 与下一可见项目锚点；空锚点表示 session 末尾，同位置不发送。拖动后的点击不切项目，保存期间拒绝重复重排。
+
+后端沿用项目服务 gate 串行化同步与重排，验证源和锚点属于当前 session，查询实时在线身份后，仅移动源 Workspace 到锚点之前。被本地排除或未在侧栏出现的其他 Workspace 保留；不整表覆盖 Herdr。外部调用不持 SQLite Mutex。CLI 暂无重排包装，适配器通过同一 CLI 的 `status server` 解析实际 endpoint，再以 Windows named pipe（Unix 使用 UnixStream）发送有界 JSONL；请求/响应 ID 必须匹配，单次 socket 连接/收发限 12 秒，响应限 4 MiB。本机协议 19 的响应为 `workspace_list`，不同于 `workspace.reordered` 事件；解析时检查身份唯一及目标相邻位置。Windows 使用 PIPE_NOWAIT 和 PeekNamedPipe 区分暂时无数据与断开，避免将延迟响应误作 EOF；没有后台遗留 I/O 线程。
+
+成功后直接复用 `store_snapshot` 的同步事务保存真实顺序、名称、目录和存在状态；继续使用迁移 8 的 `workspace_order`，无新增数据库结构。失败/超时只重新读取 Herdr 并尝试刷新缓存，不自动重发；落库失败也由后续同步对账。前端重排前后使旧查询代次失效，期间合并刷新，成功使用权威快照，随后补查；失败保留已确认界面并提示，再重读缓存及在线列表。Herdr 端调整继续通过焦点/前台 15 秒/手动同步跟随，不增加独立本地排序偏好。仅排列变化时保留 Project key、当前选择及终端连接。
+
+验证结果与明确边界见[拖动排序验收记录](docs/verification/2026-10-24-kanban-workspace-reorder.md)。
+
+### 6.1.2 Workspace Git 分支显示（2026-10-24）
+
+侧栏第一行保留 Workspace 名称，第二行显示 Git 图标及当前分支，代替原目录路径；长文本省略，悬浮提示保留完整标签与目录。游离 HEAD 显示“游离 HEAD · 短提交号”，非仓库显示“非 Git 仓库”，目录/Git 不可用、权限或查询错误显示“分支不可用”；未取得结果时显示“读取分支中…”。原未关联等 Workspace 状态仍优先显示。
+
+`useProjectSync → useProjectGitStatus → project_git_statuses → project_git::read_projects`。启动、项目/目录变化及现有的焦点、前台 15 秒、手动同步触发分支读取；Git 请求独立于 Herdr 同步成败。在途请求串行合并，过时排队请求不执行，迟到结果不覆盖新路径；相同项目和路径保留上次标签直到新结果返回。仅刷新分支不更换 Project key、任务选择或终端连接。
+
+后端仅接收项目 ID，在数据库短锁内读取当前可见项目与目录，再交给后台线程查询。按目录去重，每批最多四个并发查询；每个目录共用两秒 Git 进程截止时间，超时终止并回收子进程，输出限 16 KiB。使用无 shell 的 `git -C <目录> symbolic-ref --quiet --short HEAD`，游离时读取 `rev-parse --short HEAD`；支持未产生提交的分支、仓库子目录与 worktree。不读取 pane cwd、不改变分支或写入 Git 配置，清除宿主 GIT_DIR/GIT_WORK_TREE 等仓库定位环境，Git 权限/安全目录拒绝按不可用处理。
+
+验证：共享工作区 110 项前端测试、111 项 Rust 常规测试及生产构建通过，7 项已有 Herdr/Agent live 用例忽略。独立 Windows Tauri/WebView2 + SQLite + 真实 Git 验证七类目录、完整悬浮文案、长文本省略、中英文及 Herdr 离线下的手动/焦点事件/15 秒刷新；未执行本次真实 Herdr/Codex 生命周期或安装包替换。详见 [Workspace 分支验收记录](docs/verification/2026-10-24-kanban-workspace-branch.md)。
+
 ### 6.2 创建、编辑和移动卡片
 
 1. 顶部“新建任务”按钮或 N 打开 `TaskFormDialog`；列底部没有新增输入区域。字段顺序为标题（必填）、提示词（可空）、优先级（默认一般），提示词复用 Tiptap 的 @ 文件/$ 技能引用。调用 `create_task` 一次提交三个字段。创建失败保留完整草稿并恢复标题焦点，取消不创建；再次打开清空草稿并恢复一般优先级。
@@ -358,7 +402,17 @@ Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部�
 
 最近一次 complete 的 failed/unknown 独立派生 `cleanup_required`；后续 start 失败不会掩盖它。前端使用该字段保留清理重试入口，后端重新核对后才允许归档。归档互斥复用生命周期守卫和派发事务；更新、状态改变、派发、开始/完成、修复绑定及终端目标解析均拒绝已归档任务，防止迟到请求重新激活。
 
-归档成功后看板先从本地列表移除该任务并清理相关选择/弹层，再刷新任务和 Agent 占用信息；即使列表刷新失败，卡片与统计也不会回退。归档失败保留卡片并显示错误，不额外弹确认框。本次没有归档列表、恢复归档或批量归档入口。
+归档成功后看板先从本地列表移除该任务并清理相关选择/弹层，再刷新任务和 Agent 占用信息；即使列表刷新失败，卡片与统计也不会回退。归档失败保留卡片并显示错误，不额外弹确认框。当前没有归档列表或恢复归档入口；列标题的批量入口见下一节。
+
+### 6.2.1.1 已完成列批量归档与删除（2026-10-24）
+
+`KanbanBoard → api.archiveCompletedTasks/deleteCompletedTasks → commands::archive_completed_tasks/delete_completed_tasks → tasks::remove_completed`。完成列标题右侧提供两个带本地化悬停提示及无障碍名称的紧凑图标。空列禁用；归档直接执行，删除使用一次带任务数量及正文/本地会话删除说明的确认。点击时以 `taskColumn` 固定当前项目已完成列的 ID 快照，后来完成的任务不追加；批量执行期间锁定这批卡片的编辑、删除、恢复及拖放，保留其他任务和新建入口。
+
+IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的事务内重新核对项目、done 状态及未归档条件，并检查 `start_requests` 对应的 pending/unknown start，跳过已投影回开发中的任务；归档继续共用单项归档事务逻辑，待核实派发/生命周期及完成清理未结束均保留为跳过。删除沿用本地删除语义，允许未决完成/派发和损坏的目标文本，级联释放绑定、会话及目录，保留操作审计。不新增数据库迁移；不查询 Herdr 或关闭底层 pane。事务失败只回滚当前任务，继续处理后续 ID；提交成功后释放本应用查看连接。
+
+返回的 `succeeded` 是实际已提交的任务 ID，`skipped` 和 `failed` 分别携带任务 ID 及原因。列内展示三项数量及可展开的逐项原因；失败或跳过的任务等待列表对账。成功项先在本地移除、更新数量并清理关联弹层，再统一刷新；组件持有已移除 ID 集合，避免迟到旧列表恢复已删除/归档卡片。切项目卸载后忽略旧批次回调，不影响新项目。
+
+本增量新增 7 项前端组件回归、4 项 Rust 场景测试。共享工作区 109 项前端、112 项 Rust 常规测试、生产构建及 Rust 检查通过，7 项 Herdr live 用例默认跳过。Chromium + 真实 React、模拟 API 在 900×600、1280×800、1920×1080 验证按钮无重叠、部分成功反馈、删除确认/取消及空列禁用。隔离原生实例调试端点未就绪，Computer Use 窗口观测失败；本增量原生 WebView2/真实 Herdr 验收仍未完成，未打包安装。详见[批量操作验收记录](docs/verification/2026-10-24-kanban-completed-bulk.md)。
 
 ### 6.2.2 实时 Agent 状态与等待反馈置顶（GitHub #15）
 
@@ -397,18 +451,21 @@ Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部�
 
 `kind` 为 `file` 或 `skill`，`label` 展示名称，`ref` 保存搜索返回的路径。自定义节点为 inline + atom，渲染为不可编辑的 chip。
 
-候选触发正则为 `/([@$])([\w./_-]*)$/`，支持拉丁字母、数字、下划线和部分路径字符，不支持中文查询词、空格、反斜杠或盘符冒号。候选列表支持上下方向键、Enter/Tab、鼠标选择；Escape 关闭。
+候选触发正则为 `/([@$])([\p{L}\p{N}_./\\-]*)$/u`，支持 Unicode 字母/数字（含中文）、下划线、点、斜杠、反斜杠和连字符，不支持空格或盘符冒号。文件查询将反斜杠规范为 `/`，支持 `./` 开头的相对路径；不接受绝对路径或含 `..` 的查询。候选列表支持上下方向键、Enter/Tab、鼠标选择；Escape 关闭。
 
 | 搜索能力 | 当前实现与限制 |
 | --- | --- |
-| 文件搜索 | WalkDir 递归、不跟随符号链接；按文件名做大小写不敏感 contains，非全文、非完整相对路径匹配 |
-| 文件排除 | 过滤包含 node_modules、.git、target、__pycache__、.venv、dist、build 的路径；不读取 .gitignore |
-| 文件结果 | 先取遍历中的前 50 条，再按相对路径排序；不是全量排序后取前 50 条 |
+| 文件搜索 | `file_search.rs` 使用 ignore WalkBuilder 递归，不跟随符号链接；大小写不敏感，支持文件名、相对路径及按顺序字符模糊匹配，不搜索文件正文 |
+| 文件排除 | 默认遵循 `.gitignore`（含嵌套规则及否定规则）、Git exclude/global ignore；无 Git 仓库时仍读取 `.gitignore`。进入目录前剪枝 `.scratch`、node_modules、.git、target、__pycache__、.venv、dist、build；保留未被忽略的 `.agents`、`.github`、`.codex` 等点目录 |
+| 显式目录 | 查询中的已有相对目录前缀将搜索限定到该子树，例如 `.scratch/probe/`；只在该子树放宽父级及全局忽略规则，内部 `.gitignore` 和下级噪声目录剪枝仍生效。显式目录前缀不跟随符号链接 |
+| 文件结果 | 依次优先文件名/完整相对路径精确匹配、文件名前缀、文件名包含、相对路径包含、文件名模糊、相对路径模糊；模糊时字符间隔更少优先，再按较浅/较短路径和稳定路径顺序排序。遍历全部合格候选，以 BTreeMap 只保留最优 50 条，不受遍历顺序影响 |
 | 技能搜索 | 依次扫描当前项目 `.agents/skills`、用户 `.agents/skills`、用户 `.codex/skills`、用户整个 `.claude`；递归寻找 SKILL.md 文件，不跟随目录内符号链接 |
 | 技能元数据 | 手工从 frontmatter 读取单行 name/description，非完整 YAML 解析；name 缺失或为空时使用父目录名 |
 | 技能结果 | 按来源优先级、名称、路径确定顺序；路径及大小写不敏感的同名技能去重，项目副本优先；去重后名称或描述 contains 匹配，最后取最多 30 条 |
 
-文件排除使用迭代后的 `filter`，没有 `filter_entry` 目录剪枝，排除目录仍可能被遍历。查询没有 debounce 或缓存。候选 effect 的 cancelled 标记防止过期结果写回，但不会停止已经发起的 Rust 扫描。
+文件 IPC 通过 `spawn_blocking` 执行，避免文件系统扫描占用界面线程。文件查询采用 120ms 防抖；搜索词、种类、项目变化或关闭候选时清空旧结果并取消未发出的定时请求，已发请求的迟到结果不会写回。技能查询仍即时执行。尚无文件索引缓存，也不停止已开始的 Rust 扫描。
+
+2026-10-24 文件搜索修复：新增 8 项 Rust 文件搜索回归与 5 项真实 Tiptap/模拟 IPC 组件回归；完整前端 93 项、Rust 88 项通过，6 项既有 Herdr live 用例按原规则跳过，类型检查与生产构建通过。真实 Windows Tauri/WebView2 + Rust IPC + 隔离 SQLite 验证正式文件优先、超过 50 条时的相关性排序、路径/模糊查询、显式 `.scratch` 子树、键盘/鼠标选择、新建/编辑保存及刷新读回。真实仓库搜索 `MentionPopover` 的源码文件排第一，单次观测约 22ms；不是性能保证。本次未重新打包安装，也未执行 Herdr 派发或重启用户应用。详见[文件搜索验收记录](docs/verification/2026-10-24-kanban-file-search.md)。
 
 本次 84 项前端测试、78 项 Rust 测试通过，5 项需独立 Herdr 环境的测试按原规则跳过；生产构建通过，仍有既有大 chunk 提示。真实 Chromium + 生产前端验证 `$kanban-dev` 的候选、键盘/鼠标选择、新建/编辑保存及重新打开、切项目隔离；搜索桥接从当前源码提取的 Rust 函数扫描真实目录，Tauri 通信及任务存储为模拟。未验收原生 WebView2/Herdr 技能加载，未重新打包安装。证据与命令见[项目技能发现验收记录](docs/verification/2026-10-24-kanban-project-skills.md)。
 
@@ -458,7 +515,17 @@ sequenceDiagram
 
 引用读取按文档顺序逐个 await，无缓存和去重。仅文件引用会读取正文，每次派发读取当时的文件内容，可能与编写提示词时不同。单个引用读取失败会替换为“引用失败”文本并继续发送；参数 `_rootPath` 当前未使用，读取路径不会重新限制在项目根目录内。
 
-**执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒，Agent 启动外层超时 40 秒（Herdr 启动默认 30 秒），stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。Windows Codex 使用 `pane send-text` 发送正文，再核验目标身份，然后用 `agent send-keys right enter` 结束粘贴缓冲并提交；不叠加 `agent prompt` 的定时 Enter。其他平台/Agent 仍用 `agent prompt`。正文发送后任何错误都视为 unknown，不能自动重发。返回成功意味着 Herdr 控制接口确认了输入请求且数据库提交成功，不代表 Agent 已完成业务。
+**执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒，Agent 启动外层超时 40 秒（Herdr 启动默认 30 秒），stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。其他平台/Agent 仍用 `agent prompt`。正文发送后任何错误都视为 unknown，不能自动重发；成功不代表 Agent 已完成业务。
+
+### 6.4.1 Windows Codex 单次提交与受理核验（2026-10-24）
+
+`herdr_codex_submit.rs` 统一处理自动启动和手动派发的 Windows Codex 输入。只向 interactive_ready、非 launch_pending 的 idle/done 目标发送；已在工作或状态不明时在正文发送前拒绝，以免把旧轮次结束当成新提示词受理。
+
+实际发送顺序为 `pane send-text` 正文 → 单独发送 Right → 等待 300ms → 单独发送 Escape 关闭末尾技能候选 → 等待 100ms → 单独发送一次 Enter。每个后续写入前重新检查任务有效性和完整目标身份；不增加第二个 Enter，也不叠加 `agent prompt`。提示词正文和 `$技能名` 保持原样。
+
+Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询一次，核验窗口最多 10 秒；每次 CLI 调用仍受独立请求超时约束。同一身份的序号必须增加，且当前状态为 working/blocked/idle/done 才确认受理，兼容很快结束的轮次；原有 idle/done 和 unknown 均不能单独证明提交。超时、身份变化、任务删除或核验失败沿用 unknown 与独占保留，不能记录 sent/ready 或自动重发；提交未确认使用独立中英文提示，已有人工核实入口继续可用。`/quit` 属于准备流程的退出命令，不等待新一轮状态，改由调用方核验原进程退出及 shell 就绪。
+
+不新增 IPC、数据库字段或迁移。原提示词可在真实 Windows Herdr/Codex 中复现成功回执但仍留在输入框；只拆开 Right/Enter 并延长等待仍可复现。最终验证包含原提示词连续三次、普通中文、多行与超过 11K 字符长文本，以及独立 Tauri/WebView2 + SQLite 的文本/技能节点两种拖放；每次均检查实际回复而非只检查回执。共享工作区 112 项 Rust、110 项前端测试及构建通过；8 项 opt-in live 默认跳过，其中本次提交矩阵和退出两项另行显式运行通过。详细证据、边界与运行中应用未替换的说明见[自动提交修复验收记录](docs/verification/2026-10-24-kanban-codex-submit.md)。
 
 ### 6.5 右侧终端与恢复
 
@@ -492,15 +559,19 @@ sequenceDiagram
 
 - 首次启动先写 pending 生命周期意图。按 session + 稳定 workspace ID 查找唯一、名称精确为 `kanban` 的 Tab，仅在其中选择目录一致、未被任何卡片占用且未被未知创建隔离的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。不存在该 Tab 时创建一个；已有 Tab 但无可用候选时，在面积最大的 pane 旁分屏，按宽高选择右分屏或下分屏。创建及分屏都显式指定目录、使用 `--no-focus`。多个同名 Tab 时提示处理歧义，不任意选取。
 - 自动分配的候选查询、创建及唯一预占按 session + workspace 在进程内串行；外部调用不持 SQLite Mutex，Agent 准备与发送在释放分配锁后继续。不同 workspace 独立分配。旧任务保留原 Tab 中的有效绑定；成功完成关闭后再次启动时才按新规则进入共用 Tab。手动派发与修复仍使用用户明确选择的目标。
-- 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；新建与恢复均显式使用 `--no-daemon`，恢复通过命令行 `codex --no-daemon resume <UUID> -C <目录>` 执行。保留原有效任务绑定时直接连接，不创建或发送。
-- 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 与 Windows 唯一会话写锁核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
+- 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；新建与恢复均显式使用 `--no-daemon --approve-for-me`，恢复通过命令行 `codex --no-daemon --approve-for-me resume <UUID> -C <目录>` 执行。模式保留 workspace-write 沙箱，审批策略为 on-request，审核者为 auto_review；不修改全局 Codex/Herdr 配置。保留原有效任务绑定时直接连接，沿用该进程当前权限，不创建或发送。
+- 会话优先接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报；上报缺失的精确 CLI resume 可通过下述当前进程 argv 与 Windows 启动写锁证据核验取得 ID，不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
 - 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
 - 成功完成后的任务返回 dormant，恢复时不解析历史提示词、不发送原 prompt，精确确认恢复的 ID 后进入开发中。旧会话 ID 不会被一次错误 resume 的 ID 覆盖。
 - 启动超时或落库失败保留 unknown 与占用；提示词发送结果仍走原 `DispatchRecovery`，用户核实后再点击“核实启动结果”。核实本身不发送、启动或关闭；已确认派发、精确恢复的会话可以完成落库，否则必须确认本次启动的 pane 已不存在才释放。新创建在外部请求前持久化 workspace 的 pane/terminal 清单，响应后先保存目标，再原子预占并解除创建隔离。响应或落库丢失时对比清单、排除其他操作已有创建回执；仍有不确定新增 pane 时保留待核实，不认领或重发。自动分配跳过不确定候选，但其他任务可以继续新建 pane。旧版本没有清单的未决操作仍按 `kanban-<操作 UUID>` Tab 标签核实。
 - 完成只关闭该任务的 pane；同 Tab 的其他 pane 继续保留。最后一个 pane 关闭时 Herdr 会移除 Tab，后续任务需要时重建 `kanban` Tab，不保留额外空终端。
 - 启动和关闭的未知结果仅影响相关任务。延迟核实请求不能覆盖新操作；删除项目和修改项目配置仍受到未决操作约束；删除任务不依赖核实或 Herdr 连接。
 
-2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；上报缺失时，仅在目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用的独立 resume 命令、`codex_process.rs` 确认该进程只打开目标 UUID 的会话写锁时取得 UUID，允许不发消息直接完成。进程内切换对话会保留旧 argv，因此多会话写锁、句柄查询失败或非 Windows 均拒绝此补充分支并保留窗口；真实切换会话拒绝回归已通过。其他缺 ID 情况仍保留窗口；不从历史 ID 或其他窗口猜测，不发送恢复探测消息。新增真实生命周期回归及 Windows Tauri/WebView2 双任务新建、完成、应用重开、命令行恢复、不重发和归档验收通过；异常故障注入、未覆盖场景与证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。
+2026-10-24 会话隔离修复（[GitHub #17](https://github.com/legendxcheng/ContextSwitcher/issues/17)）：Codex 启动不再复用可能携带其他 pane 环境的共享 app-server。Herdr 只承载窗口及启动命令，实际恢复由 Codex CLI 完成。resume 的 SessionStart 要等首次新输入才上报；补充识别要求目标 interactive_ready、完整身份前后核验一致，且真实前台进程 argv 精确匹配本应用命令。匹配器兼容旧 `--no-daemon resume` 和当前 `--no-daemon --approve-for-me resume`，拒绝未知参数。旧绑定没有启动证据时仍要求唯一目标 UUID 写锁。
+
+Approve For Me 下本机 Codex 0.164.0 会额外持有辅助会话写锁。仅在本应用刚执行精确 resume、尚未向 UI 开放该启动结果时，最多等待 5 秒取得包含目标 UUID 的两个写锁 ID，随 Target 持久化；后续校验必须与这次启动集合完全相同。`Cli::validate` 只在完整进程身份一致后沿用证据，运行中不重新采集或按锁数量放行。切换会话导致锁集合变化、句柄查询失败或非 Windows 时拒绝补充分支并保留窗口；不从历史 ID、其他窗口或屏幕猜测，不发送模型恢复探测。该证据依赖当前 Codex 的进程/写锁行为，未知结果保守保留。
+
+原会话隔离增量的 Windows Tauri/WebView2 双任务与归档证据见[会话隔离验收记录](docs/verification/2026-10-24-kanban-session-isolation.md)。本次自动审批增量另在真实 Windows Herdr/Codex + SQLite 验证双任务新建、完成、精确恢复、恢复后数据库重开、无新消息完成、不重发及进程内切换拒绝；权限菜单的新建与恢复检查通过。99 项 Rust 常规测试及生产构建通过；本次未重跑原生 WebView2 拖放或安装包验收，详见 [Approve For Me 验证记录](docs/verification/2026-10-24-kanban-approve-for-me.md)。
 
 ### 6.6.1 看板立即响应与后台启动（GitHub #16）
 

@@ -41,6 +41,7 @@ fn target(id: &str) -> Target {
         terminal_id: format!("term-{id}"),
         agent: "codex".into(),
         process_id: format!("pid-{id}"),
+        codex_resume_locks: Vec::new(),
         title: id.into(),
         status: "idle".into(),
     }

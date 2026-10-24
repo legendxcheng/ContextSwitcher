@@ -1,6 +1,145 @@
 use super::*;
 
 #[test]
+#[ignore = "requires an isolated idle Codex pane; exits only that test agent to its existing shell"]
+fn live_codex_quit_preserves_the_test_shell() {
+    let workspace = std::env::var("KANBAN_LIVE_WORKSPACE").expect("explicit workspace required");
+    assert!(workspace.starts_with("kanban-acceptance-"));
+    let pane = std::env::var("KANBAN_LIVE_SUBMIT_PANE").expect("explicit test pane required");
+    let cli = crate::herdr::Cli::from_env();
+    let matches: Vec<_> = cli
+        .workspaces()
+        .unwrap()
+        .into_iter()
+        .filter(|w| w.name == workspace)
+        .collect();
+    assert_eq!(matches.len(), 1);
+    let target = cli
+        .targets(&matches[0].id)
+        .unwrap()
+        .into_iter()
+        .find(|t| t.pane_id == pane)
+        .unwrap();
+    cli.send(&target, "/quit")
+        .map_err(|error| error.message)
+        .unwrap();
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+    while cli
+        .targets(&matches[0].id)
+        .unwrap()
+        .iter()
+        .any(|t| t.pane_id == pane)
+    {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "test agent did not exit"
+        );
+        std::thread::sleep(std::time::Duration::from_millis(100));
+    }
+    let doc = cli
+        .request(&["pane", "get", &pane])
+        .map_err(|error| error.message)
+        .unwrap();
+    assert_eq!(
+        doc["result"]["pane"]["terminal_id"].as_str(),
+        Some(target.terminal_id.as_str())
+    );
+}
+
+#[test]
+#[ignore = "requires an isolated Codex fixture that replies KANBAN_SUBMIT_OK without tools"]
+fn live_short_chinese_skill_prompt_is_submitted() {
+    let workspace = std::env::var("KANBAN_LIVE_WORKSPACE").expect("explicit workspace required");
+    assert!(workspace.starts_with("kanban-acceptance-"));
+    let pane = std::env::var("KANBAN_LIVE_SUBMIT_PANE").expect("explicit test pane required");
+    let cli = crate::herdr::Cli::from_env();
+    let spaces = cli.workspaces().unwrap();
+    let matches: Vec<_> = spaces.iter().filter(|w| w.name == workspace).collect();
+    assert_eq!(matches.len(), 1);
+    let (mut app, _) = fixture();
+    app.herdr = Arc::new(crate::herdr::Cli::from_env());
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE projects SET workspace_id=?1,herdr_session=?2",
+            params![matches[0].id, cli.session()],
+        )
+        .unwrap();
+    let target = cli
+        .targets(&matches[0].id)
+        .unwrap()
+        .into_iter()
+        .find(|target| target.pane_id == pane)
+        .expect("pane must belong to the isolated workspace");
+    assert!(matches!(target.status.as_str(), "idle" | "done"));
+    let transcript =
+        std::env::var("KANBAN_LIVE_TRANSCRIPT").expect("explicit fixture transcript required");
+    let reply_count = || {
+        std::fs::read_to_string(&transcript)
+            .unwrap()
+            .lines()
+            .filter(|line| {
+                let record: serde_json::Value = serde_json::from_str(line).unwrap();
+                record["type"] == "event_msg"
+                    && record["payload"]["type"] == "task_complete"
+                    && record["payload"]["last_agent_message"] == "KANBAN_SUBMIT_OK"
+            })
+            .count()
+    };
+    // resolve_prompt trims trailing spaces, including the one after the skill.
+    let prompt = "右侧的【已完成】区域 需要补上一键归档或一键删除  $kanban-dev ";
+    let prompts = [
+        prompt.trim().to_string(),
+        prompt.trim().to_string(),
+        prompt.trim().to_string(),
+        "普通中文提示词".into(),
+        "第一行\n第二行 $kanban-dev".into(),
+        format!("{}\n$kanban-dev", "padding ".repeat(1450)),
+    ];
+    for (index, prompt) in prompts.iter().enumerate() {
+        let before = reply_count();
+        let result = app.dispatch("a", &pane, prompt, &format!("submit-{index}"));
+        println!(
+            "case {index} dispatch result: {}",
+            if result.is_ok() {
+                "accepted"
+            } else {
+                "unconfirmed"
+            }
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+        while reply_count() == before {
+            assert!(
+                std::time::Instant::now() < deadline,
+                "case {index} stayed in the composer or no actual reply arrived; dispatch: {result:?}"
+            );
+            std::thread::sleep(std::time::Duration::from_millis(200));
+        }
+        result.unwrap();
+        assert_eq!(
+            reply_count(),
+            before + 1,
+            "the prompt must produce exactly one reply"
+        );
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(5);
+        while !matches!(
+            cli.targets(&matches[0].id)
+                .unwrap()
+                .into_iter()
+                .find(|t| t.pane_id == pane)
+                .unwrap()
+                .status
+                .as_str(),
+            "idle" | "done"
+        ) {
+            assert!(std::time::Instant::now() < deadline, "agent did not settle");
+            std::thread::sleep(std::time::Duration::from_millis(100));
+        }
+    }
+}
+
+#[test]
 #[ignore = "requires an explicitly prepared isolated Herdr acceptance workspace"]
 fn live_dispatch_and_exclusive_binding() {
     let workspace =

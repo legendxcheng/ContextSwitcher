@@ -69,6 +69,7 @@ impl Cli {
             // Hooks must inherit this pane's environment, including on resume.
             // A shared app-server may retain another pane's HERDR_PANE_ID.
             "--no-daemon",
+            "--approve-for-me",
         ];
         if let Some(id) = resume {
             args.extend(["resume", id]);
@@ -76,7 +77,7 @@ impl Cli {
         args.extend(["-C", cwd]);
         check_current()?;
         self.json(&args)?;
-        let (live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
+        let (mut live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
         if live.terminal_id != target.terminal_id
             || live.agent != "codex"
             || !self.ready(&live, &info)
@@ -85,7 +86,35 @@ impl Cli {
         }
         if let Some(expected) = resume {
             let deadline = Instant::now() + Duration::from_secs(5);
+            #[cfg(windows)]
+            let needs_startup_locks = codex_session_id(&info)?.as_deref() != Some(expected);
             loop {
+                check_current()?;
+                // Capture only our own newly started process, before UI input is enabled.
+                // A running binding must retain this snapshot, never recapture it.
+                #[cfg(windows)]
+                if needs_startup_locks && live.codex_resume_locks.is_empty() {
+                    let pid = live
+                        .process_id
+                        .rsplit(':')
+                        .next()
+                        .and_then(|s| s.parse().ok());
+                    if let Some(ids) = pid.and_then(codex_process::session_locks) {
+                        if ids.len() == 2 && ids.iter().any(|id| id == expected) {
+                            self.check_target(&live).map_err(|e| e.message)?;
+                            live.codex_resume_locks = ids;
+                        }
+                    }
+                    // Herdr can report interactive readiness before Codex has
+                    // finished opening the resumed and auto-review threads.
+                    if live.codex_resume_locks.is_empty() {
+                        if Instant::now() >= deadline {
+                            return Err("flow.session_mismatch".into());
+                        }
+                        thread::sleep(Duration::from_millis(150));
+                        continue;
+                    }
+                }
                 if self.session_id(&live)?.as_deref() == Some(expected) {
                     break;
                 }
@@ -139,15 +168,7 @@ impl Cli {
         self.check_target(target)?;
         #[cfg(windows)]
         if target.agent == "codex" {
-            return submit_windows_codex(
-                &target.pane_id,
-                prompt,
-                |args| {
-                    check()?;
-                    self.request(args).map(|_| ())
-                },
-                || self.check_target(target),
-            );
+            return self.submit_windows_codex(target, prompt, check_current);
         }
         check()?;
         self.request(&["agent", "prompt", &target.pane_id, prompt])
@@ -192,6 +213,7 @@ impl Cli {
                 terminal_id: field(&info, "terminal_id")?.into(),
                 agent: String::new(),
                 process_id: format!("{shell}:{group}"),
+                codex_resume_locks: Vec::new(),
                 title: String::new(),
                 status: if shell_ready { "idle" } else { "unknown" }.into(),
             },
@@ -256,40 +278,38 @@ fn codex_resume_session(doc: &Value, target: &Target) -> Result<Option<String>, 
     else {
         return Ok(None);
     };
-    let [exe, "--no-daemon", "resume", id, "-C", cwd] = argv.as_slice() else {
+    let Some(id) = codex_resume_command_session(&argv)? else {
         return Ok(None);
+    };
+    if codex_process::owns_session(group, id, &target.codex_resume_locks) {
+        Ok(Some(id.into()))
+    } else {
+        Err("flow.session_mismatch".into())
+    }
+}
+
+fn codex_resume_command_session<'a>(argv: &[&'a str]) -> Result<Option<&'a str>, String> {
+    // Accept only launches we issue, including panes started before automatic
+    // review became the default. Unknown flags must not weaken resume evidence.
+    let (exe, id, cwd) = match argv {
+        [
+            exe,
+            "--no-daemon",
+            "--approve-for-me",
+            "resume",
+            id,
+            "-C",
+            cwd,
+        ]
+        | [exe, "--no-daemon", "resume", id, "-C", cwd] => (*exe, *id, *cwd),
+        _ => return Ok(None),
     };
     let name = exe.rsplit(['/', '\\']).next().unwrap_or("");
     if !matches!(name.to_ascii_lowercase().as_str(), "codex" | "codex.exe") || cwd.is_empty() {
         return Ok(None);
     }
     uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
-    if codex_process::owns_only_session(group, id) {
-        Ok(Some((*id).into()))
-    } else {
-        Err("flow.session_mismatch".into())
-    }
-}
-
-// Windows Codex buffers pasted characters and can interpret Enter as a newline.
-// A non-character key flushes that buffer synchronously before Enter. Do not also
-// call agent prompt here: its scheduled Enter would create a second submission.
-#[cfg(any(windows, test))]
-fn submit_windows_codex(
-    pane: &str,
-    prompt: &str,
-    mut request: impl FnMut(&[&str]) -> Result<(), SendError>,
-    revalidate: impl FnOnce() -> Result<(), SendError>,
-) -> Result<(), SendError> {
-    request(&["pane", "send-text", pane, prompt])?;
-    // Text may already be in the composer. Any later failure is uncertain, even
-    // if the next CLI could not start; retain the reservation and never replay.
-    let uncertain = |mut error: SendError| {
-        error.uncertain = true;
-        error
-    };
-    revalidate().map_err(uncertain)?;
-    request(&["agent", "send-keys", pane, "right", "enter"]).map_err(uncertain)
+    Ok(Some(id))
 }
 
 #[cfg(test)]
@@ -297,70 +317,65 @@ mod tests {
     use super::*;
 
     #[test]
-    fn codex_submit_flushes_paste_before_one_enter() {
-        let mut calls = Vec::new();
-        submit_windows_codex(
-            "w1:p1",
-            "line one\nline two",
-            |args| {
-                calls.push(args.iter().map(|s| s.to_string()).collect::<Vec<_>>());
-                Ok(())
-            },
-            || Ok(()),
-        )
-        .unwrap_or_else(|e| panic!("{}", e.message));
-        assert_eq!(
-            calls,
+    fn resume_evidence_accepts_automatic_review_and_existing_legacy_panes() {
+        let id = "22222222-2222-4222-8222-222222222222";
+        for argv in [
             vec![
-                vec!["pane", "send-text", "w1:p1", "line one\nline two"],
-                vec!["agent", "send-keys", "w1:p1", "right", "enter"],
-            ]
+                "C:\\Program Files\\Codex\\codex.exe",
+                "--no-daemon",
+                "--approve-for-me",
+                "resume",
+                id,
+                "-C",
+                "E:\\Project with spaces",
+            ],
+            vec!["codex", "--no-daemon", "resume", id, "-C", "E:/project"],
+        ] {
+            assert_eq!(codex_resume_command_session(&argv).unwrap(), Some(id));
+        }
+    }
+
+    #[test]
+    fn resume_evidence_rejects_unknown_launches_and_invalid_sessions() {
+        let id = "22222222-2222-4222-8222-222222222222";
+        for argv in [
+            vec!["codex", "resume", id, "-C", "E:/project"],
+            vec!["other.exe", "--no-daemon", "resume", id, "-C", "E:/project"],
+            vec!["codex", "--no-daemon", "resume", id, "-C", ""],
+            vec![
+                "codex",
+                "--no-daemon",
+                "--approve-for-me",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+                "unexpected prompt",
+            ],
+            vec![
+                "codex",
+                "--no-daemon",
+                "--dangerously-bypass-approvals-and-sandbox",
+                "resume",
+                id,
+                "-C",
+                "E:/project",
+            ],
+        ] {
+            assert_eq!(codex_resume_command_session(&argv).unwrap(), None);
+        }
+        assert_eq!(
+            codex_resume_command_session(&[
+                "codex",
+                "--no-daemon",
+                "--approve-for-me",
+                "resume",
+                "invalid",
+                "-C",
+                "E:/project",
+            ])
+            .unwrap_err(),
+            "flow.session_invalid"
         );
-    }
-
-    #[test]
-    fn codex_failure_after_paste_is_uncertain_and_never_replayed() {
-        let mut count = 0;
-        let error = submit_windows_codex(
-            "w1:p1",
-            "once",
-            |_| {
-                count += 1;
-                if count == 1 {
-                    Ok(())
-                } else {
-                    Err(SendError {
-                        message: "could not start CLI".into(),
-                        uncertain: false,
-                    })
-                }
-            },
-            || Ok(()),
-        )
-        .unwrap_err();
-        assert!(error.uncertain);
-        assert_eq!(count, 2);
-    }
-
-    #[test]
-    fn codex_identity_change_after_paste_prevents_enter_and_requires_verification() {
-        let mut count = 0;
-        let error = submit_windows_codex(
-            "w1:p1",
-            "once",
-            |_| {
-                count += 1;
-                Ok(())
-            },
-            || {
-                Err(SendError {
-                    message: "binding.identity_changed".into(),
-                    uncertain: false,
-                })
-            },
-        )
-        .unwrap_err();
-        assert!(error.uncertain);
-        assert_eq!(count, 1);
     }
 }

@@ -4,6 +4,7 @@ use super::*;
 struct FakeHerdr {
     sent: Mutex<Vec<String>>,
     uncertain: Mutex<bool>,
+    send_error_message: Mutex<Option<String>>,
     unavailable: Mutex<bool>,
     replaced: Mutex<bool>,
     after_send: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
@@ -18,6 +19,7 @@ impl Herdr for FakeHerdr {
                 terminal_id: "term-a".into(),
                 agent: "codex".into(),
                 process_id: "100".into(),
+                codex_resume_locks: Vec::new(),
                 title: "Agent A".into(),
                 status: "idle".into(),
             },
@@ -28,6 +30,7 @@ impl Herdr for FakeHerdr {
                 terminal_id: "term-b".into(),
                 agent: "codex".into(),
                 process_id: "200".into(),
+                codex_resume_locks: Vec::new(),
                 title: "Agent B".into(),
                 status: "idle".into(),
             },
@@ -55,7 +58,12 @@ impl Herdr for FakeHerdr {
         }
         if *self.uncertain.lock().unwrap() {
             Err(SendError {
-                message: "timeout".into(),
+                message: self
+                    .send_error_message
+                    .lock()
+                    .unwrap()
+                    .clone()
+                    .unwrap_or_else(|| "timeout".into()),
                 uncertain: true,
             })
         } else {

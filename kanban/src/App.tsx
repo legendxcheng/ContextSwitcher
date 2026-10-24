@@ -8,7 +8,7 @@ import { useProjectSync } from "./useProjectSync";
 import "./App.css";
 
 export default function App() {
-  const { projects, operations, syncing, error, refresh } = useProjectSync();
+  const { projects, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
   useEffect(() => { setSelectedId((id) => projects.some((p) => p.id === id) ? id : projects[0]?.id ?? null); }, [projects]);
@@ -20,12 +20,16 @@ export default function App() {
       <ToastContainer />
       <ProjectSidebar
         projects={projects}
+        gitStatuses={gitStatuses}
         selectedId={selectedId}
         onSelect={setSelectedId}
         onChanged={refresh}
         operations={operations}
         syncing={syncing}
         syncError={error}
+        session={session}
+        reordering={reordering}
+        onMove={move}
       />
       <main className="board-area">
         {selectedProject ? (

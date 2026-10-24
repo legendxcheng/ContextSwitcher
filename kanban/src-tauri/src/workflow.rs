@@ -11,6 +11,9 @@ pub struct Target {
     pub terminal_id: String,
     pub agent: String,
     pub process_id: String,
+    /// Observed only after this app starts a fresh, exact Codex resume process.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub codex_resume_locks: Vec<String>,
     pub title: String,
     pub status: String,
 }
@@ -57,6 +60,13 @@ pub trait Herdr: Send + Sync {
         })
     }
     fn rename_workspace(&self, _id: &str, _name: &str) -> Result<(), String> {
+        Err("workspace.unsupported".into())
+    }
+    fn move_workspace(
+        &self,
+        _id: &str,
+        _before: Option<&str>,
+    ) -> Result<Vec<crate::projects::Workspace>, String> {
         Err("workspace.unsupported".into())
     }
     fn available(&self, _workspace: &str, _cwd: &str) -> Result<Vec<Target>, String> {
@@ -407,7 +417,11 @@ impl Workflow {
             },
             Err(error) if error.uncertain => {
                 self.mark_unknown(&op.id);
-                Err(format!("dispatch.verify_required: {}", error.message))
+                Err(if error.message == "dispatch.submit_verify_required" {
+                    error.message
+                } else {
+                    format!("dispatch.verify_required: {}", error.message)
+                })
             }
             Err(error) => {
                 self.finish(&op, false, &error.message)?;

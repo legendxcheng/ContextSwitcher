@@ -9,11 +9,16 @@ mod codex_process;
 mod session_isolation_tests;
 #[path = "shared_tab.rs"]
 mod shared_tab;
+#[path = "herdr_socket.rs"]
+mod socket;
 #[path = "herdr_workspace.rs"]
 mod workspace_metadata;
 use workspace_metadata::workspace_directories;
 #[path = "herdr_codex.rs"]
 mod codex;
+#[cfg(any(windows, test))]
+#[path = "herdr_codex_submit.rs"]
+mod codex_submit;
 use serde_json::Value;
 use std::path::PathBuf;
 
@@ -92,6 +97,7 @@ impl Cli {
             terminal_id: field(agent, "terminal_id")?.into(),
             agent: field(agent, "agent")?.into(),
             process_id: format!("{shell}:{group}"),
+            codex_resume_locks: Vec::new(),
             title: agent
                 .get("terminal_title_stripped")
                 .and_then(Value::as_str)
@@ -117,26 +123,20 @@ impl Herdr for Cli {
     }
     fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
         let doc = self.json(&["workspace", "list"])?;
-        let spaces = doc
-            .pointer("/result/workspaces")
-            .and_then(Value::as_array)
-            .ok_or("herdr.invalid_response")?;
-        let directories = workspace_directories(self.session_file().as_deref()).unwrap_or_default();
-        let mut ids = std::collections::HashSet::new();
-        spaces
-            .iter()
-            .map(|w| {
-                let id = field(w, "workspace_id")?;
-                if !ids.insert(id.to_string()) {
-                    return Err("herdr.invalid_response".into());
-                }
-                Ok(crate::projects::Workspace {
-                    id: id.into(),
-                    name: field(w, "label")?.into(),
-                    directory: directories.get(id).cloned(),
-                })
-            })
-            .collect()
+        self.parse_workspaces(&doc)
+    }
+    fn move_workspace(
+        &self,
+        id: &str,
+        before: Option<&str>,
+    ) -> Result<Vec<crate::projects::Workspace>, String> {
+        let doc = self.socket_request(
+            "workspace.move_block",
+            serde_json::json!({
+                "workspace_ids": [id], "before_workspace_id": before
+            }),
+        )?;
+        self.parse_workspace_move(&doc, id, before)
     }
     fn create_workspace(
         &self,
@@ -277,6 +277,7 @@ impl Herdr for Cli {
             terminal_id: field(pane, "terminal_id")?.into(),
             agent: String::new(),
             process_id: String::new(),
+            codex_resume_locks: Vec::new(),
             title: label.into(),
             status: "unknown".into(),
         })
@@ -341,11 +342,12 @@ impl Herdr for Cli {
             return Err("binding.workspace_ambiguous".into());
         }
         let doc = self.json(&["agent", "get", &expected.pane_id])?;
-        let live = self.live_target(
+        let mut live = self.live_target(
             &expected.workspace_id,
             doc.pointer("/result/agent").ok_or("binding.missing")?,
         )?;
         if live.same_identity(expected) {
+            live.codex_resume_locks = expected.codex_resume_locks.clone();
             Ok(live)
         } else {
             Err("binding.identity_changed".into())

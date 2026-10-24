@@ -11,6 +11,8 @@ interface Suggestion {
   description?: string;
 }
 
+const mentionTrigger = /([@$])([\p{L}\p{N}_./\\-]*)$/u;
+
 /**
  * Mention popover controller. Renders a floating suggestion list when the
  * editor has an active @ or $ trigger, and inserts a mention node on select.
@@ -84,7 +86,7 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
       const $pos = sel.$from;
       const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
       // find last @ or $ not followed by space
-      const m = textBefore.match(/([@$])([\w./_-]*)$/);
+      const m = textBefore.match(mentionTrigger);
       if (m) {
         const ch = m[1];
         const q = m[2];
@@ -105,9 +107,11 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
 
   // Fetch suggestions when query/kind changes
   useEffect(() => {
+    setItems([]);
+    setIndex(0);
     if (!open) return;
     let cancelled = false;
-    (async () => {
+    const search = async () => {
       try {
         let suggestions: Suggestion[] = [];
         if (kind === "file") {
@@ -134,8 +138,12 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
       } catch (e) {
         if (!cancelled) setItems([]);
       }
-    })();
-    return () => { cancelled = true; };
+    };
+    // File discovery touches the filesystem. Combine keystrokes before scanning;
+    // skill lookup keeps its existing immediate behavior.
+    const timer = kind === "file" ? window.setTimeout(search, 120) : undefined;
+    if (kind === "skill") void search();
+    return () => { cancelled = true; window.clearTimeout(timer); };
   }, [open, query, kind, rootPath]);
 
   // Keyboard handling inside editor
@@ -178,7 +186,7 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
     const sel = state.selection;
     const $pos = sel.$from;
     const textBefore = $pos.parent.textContent.slice(0, $pos.parentOffset);
-    const m = textBefore.match(/([@$])([\w./_-]*)$/);
+    const m = textBefore.match(mentionTrigger);
     if (!m) return;
     const start = sel.from - (m[0].length);
     // Replace the trigger+query with a mention node

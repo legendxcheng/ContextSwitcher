@@ -2,6 +2,9 @@ use super::*;
 use crate::workflow::{Herdr, SendError, Target};
 use std::sync::{Arc, Mutex};
 
+#[path = "project_reorder_tests.rs"]
+mod reorder;
+
 #[derive(Default)]
 struct FakeHerdr {
     spaces: Mutex<Vec<Workspace>>,
@@ -9,6 +12,7 @@ struct FakeHerdr {
     offline: Mutex<bool>,
     reject_create: Mutex<bool>,
     session_name: Option<String>,
+    moves: Mutex<Vec<(String, Option<String>)>>,
 }
 
 fn navigation_workspace(id: &str) -> Workspace {
@@ -254,6 +258,33 @@ impl Herdr for FakeHerdr {
     fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
         Ok(vec![])
     }
+    fn move_workspace(&self, id: &str, before: Option<&str>) -> Result<Vec<Workspace>, String> {
+        self.moves
+            .lock()
+            .unwrap()
+            .push((id.into(), before.map(str::to_owned)));
+        let mut spaces = self.spaces.lock().unwrap();
+        let index = spaces
+            .iter()
+            .position(|w| w.id == id)
+            .ok_or("workspace.missing")?;
+        let moved = spaces.remove(index);
+        let index = before
+            .map(|id| {
+                spaces
+                    .iter()
+                    .position(|w| w.id == id)
+                    .ok_or("workspace.missing")
+            })
+            .transpose()?
+            .unwrap_or(spaces.len());
+        spaces.insert(index, moved);
+        if *self.lose_response.lock().unwrap() {
+            Err("herdr.timeout".into())
+        } else {
+            Ok(spaces.clone())
+        }
+    }
     fn send(&self, _: &Target, _: &str) -> Result<(), SendError> {
         unreachable!()
     }
@@ -420,6 +451,7 @@ fn legacy_binding_identity_wins_over_a_stale_name_even_during_recovery() {
         terminal_id: "t".into(),
         agent: "codex".into(),
         process_id: "1".into(),
+        codex_resume_locks: Vec::new(),
         title: "".into(),
         status: "idle".into(),
     };

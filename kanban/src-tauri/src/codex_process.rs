@@ -1,15 +1,58 @@
 //! Conservative evidence for an input-free resume. argv survives an in-process
-//! /resume switch, so it is insufficient when more than one thread is loaded.
+//! /resume switch, so later lock observations must match the startup evidence.
 //! Unknown platform/API results fail closed; normal hook reports don't use this.
 
 #[cfg(not(windows))]
-pub(super) fn owns_only_session(_: u64, _: &str) -> bool {
-    false
+pub(super) fn session_locks(_: u64) -> Option<Vec<String>> {
+    None
 }
 
 #[cfg(windows)]
-pub(super) fn owns_only_session(pid: u64, expected: &str) -> bool {
-    windows::sessions(pid).is_some_and(|ids| ids.len() == 1 && ids.contains(expected))
+pub(super) fn session_locks(pid: u64) -> Option<Vec<String>> {
+    let mut ids: Vec<_> = windows::sessions(pid)?.into_iter().collect();
+    ids.sort();
+    Some(ids)
+}
+
+pub(super) fn owns_session(pid: u64, expected: &str, startup: &[String]) -> bool {
+    session_locks(pid).is_some_and(|ids| matches_startup_locks(&ids, expected, startup))
+}
+
+fn matches_startup_locks(ids: &[String], expected: &str, startup: &[String]) -> bool {
+    if startup.is_empty() {
+        // Older bindings did not record the auto-review helper's lock.
+        return ids.len() == 1 && ids[0] == expected;
+    }
+    // A newly launched automatic-review process can hold the resumed thread
+    // and an auxiliary thread. Never infer that an arbitrary second lock is safe:
+    // every ID must still match the evidence captured at our own process startup.
+    ids == startup && startup.len() <= 2 && startup.iter().any(|id| id == expected)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn resume_locks_keep_the_startup_helper_but_reject_a_switched_conversation() {
+        let root = "root".to_string();
+        let helper = "helper".to_string();
+        let startup = vec![helper.clone(), root.clone()];
+        assert!(matches_startup_locks(&startup, &root, &startup));
+        assert!(!matches_startup_locks(
+            &["other".into(), root.clone()],
+            &root,
+            &startup
+        ));
+        assert!(!matches_startup_locks(
+            &[helper.clone(), "other".into(), root.clone()],
+            &root,
+            &startup
+        ));
+        assert!(!matches_startup_locks(&startup, "other", &startup));
+        assert!(!matches_startup_locks(&startup, &root, &[]));
+        assert!(matches_startup_locks(&[root.clone()], &root, &[]));
+    }
 }
 
 #[cfg(windows)]
@@ -175,7 +218,7 @@ mod windows {
             if uuid::Uuid::parse_str(id).is_ok() {
                 ids.insert(id.to_owned());
             }
-            if ids.len() > 1 {
+            if ids.len() > 2 {
                 break;
             }
         }

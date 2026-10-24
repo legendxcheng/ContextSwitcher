@@ -94,7 +94,7 @@ describe("默认终端与任务选择", () => {
     });
     render(<App />); await screen.findByText("已连接");
     const first = vi.mocked(invoke).mock.calls.find(([name]) => name === "terminal_open")![1] as { connectionId: string };
-    fireEvent.click(screen.getByRole("button", { name: /^第二项目\s*E:\/fixture$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^第二项目/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: taskB.id })));
     expect(invoke).toHaveBeenCalledWith("terminal_close", { connectionId: first.connectionId });
     expect(screen.getByRole("button", { name: "查看终端：任务 B" }).getAttribute("aria-pressed")).toBe("true");

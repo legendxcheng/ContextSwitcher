@@ -3,6 +3,7 @@ import type { CSSProperties } from "react";
 const paths = {
   board: "M3 4h18v16H3z M9 4v16 M15 4v16 M5.5 8h1 M11.5 8h1 M17.5 8h1",
   folder: "M3 7V5h6l2 2h10v13H3z",
+  branch: "M6 6v12 M6 12h6a6 6 0 0 0 6-6 M8 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M8 20a2 2 0 1 1-4 0 2 2 0 0 1 4 0 M20 4a2 2 0 1 1-4 0 2 2 0 0 1 4 0",
   plus: "M12 5v14 M5 12h14",
   arrow: "M5 12h14 M13 6l6 6-6 6",
   terminal: "m5 7 5 5-5 5 M13 17h6",

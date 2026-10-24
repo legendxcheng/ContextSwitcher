@@ -44,6 +44,11 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const optimisticStarts = useRef(new Map<string, Task["flow"]>());
   const [busyTasks, setBusyTasks] = useState(new Set<string>());
   const [flowError, setFlowError] = useState("");
+  const bulkTaskIdsRef = useRef(new Set<string>());
+  const [bulkTaskIds, setBulkTaskIds] = useState(new Set<string>());
+  const [bulkAction, setBulkAction] = useState<"archive" | "delete" | null>(null);
+  const [bulkFeedback, setBulkFeedback] = useState<{ message: string; issues: { id: string; message: string }[]; failed: boolean } | null>(null);
+  const removedTaskIds = useRef(new Set<string>());
   const selectedTask = tasks.find((task) => task.id === selectedTaskId && taskColumn(task) === "in_progress") ?? null;
   const suppressClick = useRef(false);
   const workspaceRef = useRef<HTMLDivElement>(null);
@@ -84,7 +89,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     taskRequest.current = request;
     try {
       const result = await request;
-      const t = result.map(task => optimisticStarts.current.has(task.id)
+      const t = result.filter(task => !removedTaskIds.current.has(task.id)).map(task => optimisticStarts.current.has(task.id)
         ? { ...task, flow: optimisticStarts.current.get(task.id) } : task);
       if (sequence === loadSequence.current) {
         setTasks(t);
@@ -102,16 +107,52 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [project.id]);
   useTaskFlowUpdates(project.id, () => load(false));
 
-  function handleRemoved(id: string) {
+  function handleRemoved(ids: string[]) {
+    if (!mounted.current) return;
     // Removal already committed: a failed list refresh must not resurrect this card.
+    const removed = new Set(ids);
+    ids.forEach(id => removedTaskIds.current.add(id));
     ++loadSequence.current;
-    setTasks((current) => current.filter((task) => task.id !== id));
-    setEditingTaskId((current) => current === id ? null : current);
-    setSelectedTaskId((current) => current === id ? null : current);
-    setRepairingTaskId((current) => current === id ? null : current);
-    setRecoveringTaskId((current) => current === id ? null : current);
-    setPendingDispatch((current) => current?.task.id === id ? null : current);
-    load();
+    setTasks((current) => current.filter((task) => !removed.has(task.id)));
+    setEditingTaskId((current) => current && removed.has(current) ? null : current);
+    setSelectedTaskId((current) => current && removed.has(current) ? null : current);
+    setRepairingTaskId((current) => current && removed.has(current) ? null : current);
+    setRecoveringTaskId((current) => current && removed.has(current) ? null : current);
+    setPendingDispatch((current) => current && removed.has(current.task.id) ? null : current);
+    void load();
+  }
+
+  async function handleBulkAction(action: "archive" | "delete") {
+    if (bulkTaskIdsRef.current.size) return;
+    const snapshot = tasks.filter(task => taskColumn(task) === "done");
+    if (!snapshot.length) return;
+    if (action === "delete" && !confirm(tr("batch.delete_confirm").replace("{count}", String(snapshot.length)))) return;
+    const ids = snapshot.map(task => task.id);
+    bulkTaskIdsRef.current = new Set(ids);
+    setBulkTaskIds(new Set(ids));
+    setBulkAction(action);
+    setBulkFeedback(null);
+    try {
+      const result = await (action === "archive" ? api.archiveCompletedTasks : api.deleteCompletedTasks)(project.id, ids);
+      if (!mounted.current) return;
+      // Commit local removal before the reconciliation request can fail or return stale data.
+      handleRemoved(result.succeeded);
+      const message = tr(`batch.${action}_result`)
+        .replace("{succeeded}", String(result.succeeded.length))
+        .replace("{skipped}", String(result.skipped.length))
+        .replace("{failed}", String(result.failed.length));
+      setBulkFeedback({ message, failed: result.failed.length > 0,
+        issues: [...result.skipped, ...result.failed].map(issue => ({ id: issue.id,
+          message: `${snapshot.find(task => task.id === issue.id)?.name ?? issue.id}：${errorText(issue.error)}` })) });
+    } catch (error) {
+      if (mounted.current) {
+        setBulkFeedback({ message: errorText(error), issues: [], failed: true });
+        void load();
+      }
+    } finally {
+      bulkTaskIdsRef.current.clear();
+      if (mounted.current) { setBulkTaskIds(new Set()); setBulkAction(null); }
+    }
   }
 
   // Keyboard shortcut: N opens the same form as the toolbar action.
@@ -148,6 +189,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   }
 
   async function moveTask(task: Task, status: TaskStatus) {
+    if (bulkTaskIdsRef.current.has(task.id)) return;
     if (activeFlows.current.has(task.id) || (flowUnresolved(task) && !(status === "done" && task.flow?.kind === "complete" && task.flow.state === "unknown"))) return;
     activeFlows.current.add(task.id);
     setBusyTasks(new Set(activeFlows.current));
@@ -182,6 +224,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   }
 
   async function recoverFlow(task: Task) {
+    if (bulkTaskIdsRef.current.has(task.id)) return;
     if (!task.flow?.operation_id || activeFlows.current.has(task.id)) return;
     if (task.flow.kind === "complete") { await moveTask(task, "done"); return; }
     activeFlows.current.add(task.id); setBusyTasks(new Set(activeFlows.current));
@@ -231,8 +274,27 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
               >
                 <div className="col-header">
                   <span className="col-title"><Icon name={emptyIcon} />{label}</span>
-                  <span className="col-count">{col.length}</span>
+                  <div className="col-header-actions">
+                    <span className="col-count">{col.length}</span>
+                    {status === "done" && <>
+                      <button className="btn-icon" disabled={!col.length || !!bulkAction} onClick={() => handleBulkAction("archive")}
+                        aria-label={tr("batch.archive")} title={tr("batch.archive")}>
+                        {bulkAction === "archive" ? <span className="spinner" /> : <Icon name="archive" />}
+                      </button>
+                      <button className="btn-icon btn-danger" disabled={!col.length || !!bulkAction} onClick={() => handleBulkAction("delete")}
+                        aria-label={tr("batch.delete")} title={tr("batch.delete")}>
+                        {bulkAction === "delete" ? <span className="spinner" /> : <Icon name="trash" />}
+                      </button>
+                    </>}
+                  </div>
                 </div>
+                {status === "done" && bulkFeedback && <div className="col-batch-result" role={bulkFeedback.failed ? "alert" : "status"}>
+                  <p>{bulkFeedback.message}</p>
+                  {bulkFeedback.issues.length > 0 && <details>
+                    <summary>{tr("batch.details")}</summary>
+                    <ul>{bulkFeedback.issues.map(issue => <li key={issue.id}>{issue.message}</li>)}</ul>
+                  </details>}
+                </div>}
                 {col.length === 0 ? (
                   <div className="col-empty">
                     <span className="col-empty-icon"><Icon name={emptyIcon} size={22} /></span>
@@ -244,7 +306,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                     {col.map((task) => (
                       <div
                         key={task.id}
-                        draggable={!busyTasks.has(task.id) && !flowUnresolved(task)}
+                        draggable={!bulkTaskIds.has(task.id) && !busyTasks.has(task.id) && !flowUnresolved(task)}
                         onPointerDownCapture={(event) => {
                           dragFromControl.current = event.target instanceof Element && !!event.target.closest("button, input, select, textarea");
                         }}
@@ -263,11 +325,12 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                           task={task}
                           agentStatus={agentStatuses.get(task.id)!}
                           busy={busyTasks.has(task.id)}
+                          removing={bulkTaskIds.has(task.id)}
                           onComplete={() => moveTask(task, "done")}
                           onStart={() => moveTask(task, "in_progress")}
                           onFlowRecover={() => recoverFlow(task)}
                           onChanged={load}
-                          onRemoved={() => handleRemoved(task.id)}
+                          onRemoved={() => handleRemoved([task.id])}
                           onRecover={() => setRecoveringTaskId(task.id)}
                           selected={selectedTaskId === task.id}
                           onSelect={taskColumn(task) === "in_progress" ? () => { if (!suppressClick.current) setSelectedTaskId(task.id); } : undefined}

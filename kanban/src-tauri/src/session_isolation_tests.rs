@@ -1,12 +1,42 @@
 //! Opt-in regression at the task lifecycle boundary, using the real CLI adapter.
 //! Prepare an empty, isolated workspace with the Codex integration installed.
-use crate::{herdr::Cli, models::TaskPriority, tasks, workflow::Workflow};
+use crate::{
+    herdr::Cli,
+    models::TaskPriority,
+    tasks,
+    workflow::{Herdr, Target, Workflow},
+};
 use rusqlite::{Connection, params};
 use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 fn operation() -> String {
     uuid::Uuid::new_v4().to_string()
+}
+
+fn assert_automatic_review_launch(cli: &Cli, target: &Target, cwd: &str, resume: Option<&str>) {
+    let doc = cli
+        .json(&["pane", "process-info", "--pane", &target.pane_id])
+        .unwrap();
+    let info = &doc["result"]["process_info"];
+    let group = info["foreground_process_group_id"].as_u64().unwrap();
+    let processes = info["foreground_processes"].as_array().unwrap();
+    let process = processes
+        .iter()
+        .find(|p| p["pid"].as_u64() == Some(group))
+        .unwrap();
+    let argv: Vec<_> = process["argv"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|arg| arg.as_str().unwrap())
+        .collect();
+    let mut expected = vec!["--no-daemon", "--approve-for-me"];
+    if let Some(id) = resume {
+        expected.extend(["resume", id]);
+    }
+    expected.extend(["-C", cwd]);
+    assert_eq!(&argv[1..], expected);
 }
 
 #[test]
@@ -106,6 +136,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
     let shared_tab = cli.kanban_tab(workspace).unwrap().unwrap();
     for id in &ids {
         let target = app.binding(id).unwrap().target.unwrap();
+        assert_automatic_review_launch(&cli, &target, &cwd, None);
         let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
         assert_eq!(
             pane.pointer("/result/pane/tab_id")
@@ -152,7 +183,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
     let conn = Connection::open(&path).unwrap();
     crate::db::init(&conn).unwrap();
     crate::db::recover_interrupted(&conn).unwrap();
-    let app = Workflow {
+    let mut app = Workflow {
         db: Arc::new(Mutex::new(conn)),
         herdr: Arc::new(Cli::from_env()),
     };
@@ -160,6 +191,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         app.start_task(id, "MUST_NOT_BE_SENT_ON_RESUME", &operation())
             .unwrap();
         let target = app.binding(id).unwrap().target.unwrap();
+        assert_automatic_review_launch(&cli, &target, &cwd, Some(&sessions[index]));
         let tab = cli.kanban_tab(workspace).unwrap().unwrap();
         let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
         assert_eq!(
@@ -170,6 +202,20 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         assert_eq!(
             app.herdr.session_id(&target).unwrap(),
             Some(sessions[index].clone())
+        );
+        assert_eq!(target.codex_resume_locks.len(), 2);
+        // The new process evidence must survive a Kanban restart before input.
+        drop(app);
+        let conn = Connection::open(&path).unwrap();
+        crate::db::init(&conn).unwrap();
+        crate::db::recover_interrupted(&conn).unwrap();
+        app = Workflow {
+            db: Arc::new(Mutex::new(conn)),
+            herdr: Arc::new(Cli::from_env()),
+        };
+        assert_eq!(
+            app.binding(id).unwrap().target.unwrap().codex_resume_locks,
+            target.codex_resume_locks
         );
         assert!(
             app.complete_task(id, &operation())
@@ -190,6 +236,36 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
             Some("Reply only READY. Do not run commands or edit files.")
         );
     }
+    // A later in-process switch keeps the original argv. Its changed lock set
+    // must not be accepted as the startup helper, even after automatic review.
+    app.start_task(&ids[0], "MUST_NOT_BE_SENT_ON_RESUME", &operation())
+        .unwrap();
+    let target = app.binding(&ids[0]).unwrap().target.unwrap();
+    cli.send_checked(&target, &format!("/resume {}", sessions[1]), &|| Ok(()))
+        .unwrap_or_else(|e| panic!("{}", e.message));
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while app.herdr.session_id(&target).is_ok() {
+        assert!(
+            Instant::now() < deadline,
+            "switched session was not detected"
+        );
+        std::thread::sleep(Duration::from_millis(100));
+    }
+    let outcome = app.complete_task(&ids[0], &operation()).unwrap();
+    assert_eq!(outcome.warning.as_deref(), Some("flow.session_mismatch"));
+    assert!(app.herdr.pane_exists(&target).unwrap());
+    let task = tasks::list(&app.db.lock().unwrap(), "test")
+        .unwrap()
+        .into_iter()
+        .find(|task| task.id == ids[0])
+        .unwrap();
+    assert!(task.cleanup_required);
+    assert_eq!(
+        task.flow.unwrap().session_id.as_deref(),
+        Some(sessions[0].as_str())
+    );
+    // Explicit cleanup belongs to this isolated regression, never the task flow.
+    cli.json(&["pane", "close", &target.pane_id]).unwrap();
     drop(app);
     std::fs::remove_file(path).unwrap();
 }

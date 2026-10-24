@@ -65,6 +65,7 @@ $result = switch ($command) {
                 terminal_id: "term".into(),
                 agent: "codex".into(),
                 process_id: "1:2".into(),
+                codex_resume_locks: Vec::new(),
                 title: "".into(),
                 status: "idle".into(),
             };

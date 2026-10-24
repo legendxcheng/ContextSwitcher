@@ -1,12 +1,14 @@
 mod agent_status;
 mod commands;
 mod db;
+mod file_search;
 mod herdr;
 mod image_commands;
 mod images;
 mod lifecycle;
 mod models;
 mod project_commands;
+mod project_git;
 mod projects;
 mod start;
 mod tasks;
@@ -62,6 +64,8 @@ pub fn run() {
             project_commands::update_project,
             project_commands::delete_project,
             project_commands::sync_projects,
+            project_commands::project_git_statuses,
+            project_commands::move_project,
             project_commands::workspace_operations,
             project_commands::recover_workspace,
             project_commands::link_workspace,
@@ -71,6 +75,8 @@ pub fn run() {
             commands::update_task_status,
             commands::delete_task,
             commands::archive_task,
+            commands::archive_completed_tasks,
+            commands::delete_completed_tasks,
             commands::search_files,
             commands::search_skills,
             commands::read_file_content,

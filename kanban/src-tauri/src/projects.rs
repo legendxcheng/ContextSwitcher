@@ -74,6 +74,43 @@ impl ProjectService {
     pub fn sync(&self) -> Result<Snapshot, String> {
         let _gate = self.gate.lock().map_err(err)?;
         let workspaces = self.herdr.workspaces()?;
+        self.store_snapshot(workspaces)
+    }
+    /// Move one stable identity before another, leaving unlisted/excluded workspaces intact.
+    pub fn move_project(&self, id: &str, before: Option<&str>) -> Result<Snapshot, String> {
+        let _gate = self.gate.lock().map_err(err)?;
+        let project = self.get(id)?;
+        let workspace = identity(&project, self.herdr.session())?;
+        let anchor = before
+            .map(|id| {
+                let p = self.get(id)?;
+                identity(&p, self.herdr.session())
+            })
+            .transpose()?;
+        if anchor.as_deref() == Some(&workspace) {
+            return Err("workspace.invalid_input".into());
+        }
+        let live = self.herdr.workspaces()?;
+        if !live.iter().any(|w| w.id == workspace)
+            || anchor
+                .as_ref()
+                .is_some_and(|id| !live.iter().any(|w| &w.id == id))
+        {
+            self.store_snapshot(live)?;
+            return Err("workspace.missing".into());
+        }
+        match self.herdr.move_workspace(&workspace, anchor.as_deref()) {
+            Ok(workspaces) => self.store_snapshot(workspaces),
+            Err(error) => {
+                // A timeout may follow a successful move. Read actual state, never resend.
+                if let Ok(workspaces) = self.herdr.workspaces() {
+                    let _ = self.store_snapshot(workspaces);
+                }
+                Err(error)
+            }
+        }
+    }
+    fn store_snapshot(&self, workspaces: Vec<Workspace>) -> Result<Snapshot, String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         let existing = list(&tx)?;

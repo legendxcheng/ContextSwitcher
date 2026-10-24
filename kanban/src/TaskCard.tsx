@@ -18,12 +18,13 @@ interface TaskCardProps {
   onSelect?: () => void;
   selected?: boolean;
   busy?: boolean;
+  removing?: boolean;
   onComplete: () => void;
   onStart: () => void;
   onFlowRecover?: () => void;
 }
 
-export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, onComplete, onStart, onFlowRecover }: TaskCardProps) {
+export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, removing, onComplete, onStart, onFlowRecover }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
@@ -32,7 +33,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
   const archiveReason = task.binding?.operation ? "dispatch.verify_required"
     : ["pending", "unknown"].includes(task.flow?.state ?? "") ? "flow.verify_required"
     : task.cleanup_required ? "archive.cleanup_required" : "";
-  const disabled = !!busy || archiving || deleting;
+  const disabled = !!busy || !!removing || archiving || deleting;
   const controlsDisabled = disabled || flowUnresolved(task);
   const preparation = preparationLabel(task);
   const controls = {
@@ -41,7 +42,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
   };
 
   async function handleArchive() {
-    if (archivingRef.current || busy || archiveReason) return;
+    if (archivingRef.current || busy || removing || archiveReason) return;
     archivingRef.current = true;
     setArchiving(true); setArchiveError("");
     try {
@@ -56,7 +57,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
   }
 
   async function handleDelete() {
-    if (deletingRef.current || archivingRef.current) return;
+    if (deletingRef.current || archivingRef.current || removing) return;
     if (!confirm(`删除任务「${task.name}」？`)) return;
     deletingRef.current = true;
     setDeleting(true);
@@ -99,7 +100,7 @@ export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, 
             {taskColumn(task) === "todo" && !task.binding?.operation && <button onClick={() => onDispatchTask(task.id)} className="btn-primary">派发<Icon name="arrow" size={13} /></button>}
             {taskColumn(task) === "in_progress" && <button onClick={onComplete} className="btn-success">标记完成</button>}
           </fieldset>
-          <button disabled={deleting || archiving} onClick={handleDelete} className="btn-icon btn-danger" aria-label={tr("task.delete")} title={tr("task.delete")}><Icon name="trash" /></button>
+          <button disabled={deleting || archiving || removing} onClick={handleDelete} className="btn-icon btn-danger" aria-label={tr("task.delete")} title={tr("task.delete")}><Icon name="trash" /></button>
         </div>
       </div>
       {(preparation || busy) && <p role="status" className="task-notice">{tr(preparation ?? "flow.busy")}</p>}

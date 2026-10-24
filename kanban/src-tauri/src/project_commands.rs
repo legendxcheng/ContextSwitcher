@@ -6,6 +6,27 @@ use crate::{
 use std::sync::Arc;
 use tauri::State;
 
+#[tauri::command]
+pub async fn project_git_statuses(
+    state: State<'_, crate::commands::DbState>,
+    project_ids: Vec<String>,
+) -> Result<Vec<crate::project_git::ProjectGitStatus>, String> {
+    let db = state.0.clone();
+    run(move || {
+        let requested: std::collections::HashSet<_> = project_ids.into_iter().collect();
+        let projects = {
+            let conn = db.lock().map_err(|e| e.to_string())?;
+            crate::projects::visible_list(&conn)?
+                .into_iter()
+                .filter(|p| requested.contains(&p.id))
+                .map(|p| (p.id, p.root_path))
+                .collect()
+        };
+        Ok(crate::project_git::read_projects(projects))
+    })
+    .await
+}
+
 async fn run<T: Send + 'static>(
     f: impl FnOnce() -> Result<T, String> + Send + 'static,
 ) -> Result<T, String> {
@@ -17,6 +38,15 @@ async fn run<T: Send + 'static>(
 pub async fn sync_projects(service: State<'_, Arc<ProjectService>>) -> Result<Snapshot, String> {
     let service = service.inner().clone();
     run(move || service.sync()).await
+}
+#[tauri::command]
+pub async fn move_project(
+    service: State<'_, Arc<ProjectService>>,
+    project_id: String,
+    before_project_id: Option<String>,
+) -> Result<Snapshot, String> {
+    let service = service.inner().clone();
+    run(move || service.move_project(&project_id, before_project_id.as_deref())).await
 }
 #[tauri::command]
 pub async fn workspace_operations(

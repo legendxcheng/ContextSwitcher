@@ -16,6 +16,12 @@ export interface Project {
 }
 
 export interface HerdrWorkspace { id: string; name: string; directory: string | null }
+export interface ProjectGitStatus {
+  project_id: string;
+  root_path: string;
+  state: "branch" | "detached" | "not_repository" | "unavailable";
+  head: string | null;
+}
 export interface WorkspaceOperation { id: string; session: string; name: string; cwd: string; workspace_id: string | null; project_id: string; state: string; error: string }
 export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
@@ -44,6 +50,7 @@ export interface HerdrTarget {
   terminal_id: string;
   agent: string;
   process_id: string;
+  codex_resume_locks?: string[];
   title: string;
   status: string;
 }

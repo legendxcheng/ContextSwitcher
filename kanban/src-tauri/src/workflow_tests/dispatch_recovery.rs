@@ -1,6 +1,23 @@
 use super::*;
 
 #[test]
+fn unconfirmed_submission_stays_unknown_without_blocking_another_pane_or_replaying() {
+    let (app, external) = fixture();
+    *external.uncertain.lock().unwrap() = true;
+    *external.send_error_message.lock().unwrap() = Some("dispatch.submit_verify_required".into());
+    assert_eq!(
+        app.dispatch("a", "w1:p1", "Once", "op-1").unwrap_err(),
+        "dispatch.submit_verify_required"
+    );
+    assert_eq!(app.binding("a").unwrap().state, "unknown");
+    assert!(app.dispatch("a", "w1:p1", "Once", "op-1").is_err());
+    assert!(app.dispatch("a", "w1:p1", "Once", "op-2").is_err());
+    *external.uncertain.lock().unwrap() = false;
+    app.dispatch("b", "w1:p2", "Other task", "other").unwrap();
+    assert_eq!(*external.sent.lock().unwrap(), vec!["Once", "Other task"]);
+}
+
+#[test]
 fn a_known_unsent_failure_releases_only_the_new_reservation() {
     let (app, external) = fixture();
     *external.unavailable.lock().unwrap() = true;

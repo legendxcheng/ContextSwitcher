@@ -1,12 +1,15 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import type {
-  Project, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
+  Project, ProjectGitStatus, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
 // Projects
 export const listProjects = () => invoke<Project[]>("list_projects");
 export const syncProjects = () => invoke<ProjectSnapshot>("sync_projects");
+export const projectGitStatuses = (projectIds: string[]) => invoke<ProjectGitStatus[]>("project_git_statuses", { projectIds });
+export const moveProject = (projectId: string, beforeProjectId: string | null) =>
+  invoke<ProjectSnapshot>("move_project", { projectId, beforeProjectId });
 export const workspaceOperations = () => invoke<WorkspaceOperation[]>("workspace_operations");
 export const createProject = (name: string, rootPath: string, operationId: string) => invoke<Project>("create_project", { name, rootPath, operationId });
 export const updateProject = (id: string, name: string, fallbackPath: string | null) => invoke<Project>("update_project", { id, name, fallbackPath });
@@ -39,6 +42,15 @@ export const recoverLifecycle = (taskId: string, operationId: string) =>
   invoke<void>("recover_lifecycle", { taskId, operationId });
 export const deleteTask = (id: string) => invoke<void>("delete_task", { id });
 export const archiveTask = (id: string) => invoke<void>("archive_task", { id });
+export interface BatchTaskResult {
+  succeeded: string[];
+  skipped: { id: string; error: string }[];
+  failed: { id: string; error: string }[];
+}
+export const archiveCompletedTasks = (projectId: string, taskIds: string[]) =>
+  invoke<BatchTaskResult>("archive_completed_tasks", { projectId, taskIds });
+export const deleteCompletedTasks = (projectId: string, taskIds: string[]) =>
+  invoke<BatchTaskResult>("delete_completed_tasks", { projectId, taskIds });
 
 // Discovery
 export const searchFiles = (rootPath: string, query: string) =>

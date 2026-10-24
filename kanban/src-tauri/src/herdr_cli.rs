@@ -33,7 +33,7 @@ impl Cli {
         }
         cmd
     }
-    pub fn request(&self, args: &[&str]) -> Result<Value, SendError> {
+    pub(super) fn output(&self, args: &[&str]) -> Result<Vec<u8>, SendError> {
         let mut child = self
             .command()
             .args(args)
@@ -93,6 +93,10 @@ impl Cli {
                 uncertain: true,
             });
         }
+        Ok(stdout)
+    }
+    pub fn request(&self, args: &[&str]) -> Result<Value, SendError> {
+        let stdout = self.output(args)?;
         // Unlike agent commands, pane send-text intentionally prints nothing
         // after its server acknowledgement. Only this command accepts silence.
         if (args.starts_with(&["pane", "send-text"]) || args.starts_with(&["pane", "close"]))
