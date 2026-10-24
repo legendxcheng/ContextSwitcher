@@ -26,8 +26,9 @@ impl Cli {
             .map(PathBuf::from)
             .map(|p| p.join("Programs/Herdr/bin/herdr.exe"));
         Self {
-            executable: installed
-                .filter(|p| p.is_file())
+            executable: std::env::var_os("KANBAN_HERDR_EXECUTABLE")
+                .map(PathBuf::from)
+                .or_else(|| installed.filter(|p| p.is_file()))
                 .unwrap_or_else(|| "herdr".into()),
             session: std::env::var("KANBAN_HERDR_SESSION").unwrap_or_else(|_| "default".into()),
         }

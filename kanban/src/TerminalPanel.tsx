@@ -8,6 +8,7 @@ import { tr, errorText } from "./i18n";
 import { preparationLabel } from "./taskFlow";
 import { terminalAppearance } from "./terminalAppearance";
 import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
+import { attachTerminalScroll } from "./terminalScroll";
 
 export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?: () => void }) {
   const host = useRef<HTMLDivElement>(null);
@@ -29,10 +30,15 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
     let pendingInput = "";
     let writing = false;
     let inputTimer: ReturnType<typeof setTimeout> | undefined;
+    let sizeGeneration = 0;
+    let sizeSync = Promise.resolve();
+    let sizeAcknowledged = false;
+    let renderedSize = { cols: 0, rows: 0 };
     const terminal = new Terminal({ ...terminalAppearance, fontSize: readTerminalFontSize(), scrollback: 3000, convertEol: false });
     const fit = new FitAddon();
     terminal.loadAddon(fit);
     terminal.open(host.current);
+    const scroll = attachTerminalScroll(host.current, terminal, connectionId, fail);
     terminal.attachCustomKeyEventHandler((event) => {
       const delta = terminalFontSizeDelta(event);
       if (!delta) return true;
@@ -54,6 +60,7 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
     function fail(e: unknown) {
       if (!active) return;
       ended = true; connected = false; pendingInput = "";
+      scroll.pause();
       terminal.options.disableStdin = true;
       setState("terminal.disconnected"); setError(errorText(e));
       void api.closeTerminal(connectionId).catch(() => {});
@@ -71,17 +78,30 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
       pendingInput += data;
       clearTimeout(inputTimer); inputTimer = setTimeout(() => void flushInput(), 10);
     });
-    const resizeListener = terminal.onResize(({ cols, rows }) => {
-      if (active && connected) void api.resizeTerminal(connectionId, cols, rows).catch(fail);
-    });
+    function syncSize() {
+      scroll.pause();
+      sizeAcknowledged = false;
+      const generation = ++sizeGeneration;
+      const { cols, rows } = terminal;
+      sizeSync = sizeSync.then(async () => {
+        if (!active || !connected || generation !== sizeGeneration) return;
+        await api.resizeTerminal(connectionId, cols, rows);
+        if (active && connected && generation === sizeGeneration) { sizeAcknowledged = true; enableScroll(); }
+      }).catch(fail);
+    }
+    function enableScroll() {
+      if (active && connected && sizeAcknowledged && renderedSize.cols === terminal.cols && renderedSize.rows === terminal.rows) scroll.enable();
+    }
+    const resizeListener = terminal.onResize(syncSize);
     const observer = new ResizeObserver(() => { if (active) fit.fit(); });
     observer.observe(host.current);
     void api.openTerminal(task.id, connectionId, terminal.cols, terminal.rows, (packet) => {
       if (!active || ended) return;
       if (packet.kind === "closed") { fail(packet.message); return; }
       // Output can arrive before the invoke result. It belongs to this connection.
-      connected = true;
       terminal.write(new Uint8Array(packet.data), () => {
+        if (packet.cols && packet.rows) renderedSize = { cols: packet.cols, rows: packet.rows };
+        enableScroll();
         if (active && !ended) void api.ackTerminal(connectionId, packet.data.length).catch(fail);
       });
     }).then(() => {
@@ -89,10 +109,11 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
       connected = true; terminal.options.disableStdin = false; setState("terminal.connected");
       fit.fit();
       // fit may already have run during connect, without an active resize channel.
-      void api.resizeTerminal(connectionId, terminal.cols, terminal.rows).catch(fail);
+      syncSize();
     }).catch(fail);
     return () => {
       active = false; connected = false; clearTimeout(inputTimer); pendingInput = "";
+      scroll.dispose();
       observer.disconnect(); dataListener.dispose(); resizeListener.dispose(); terminal.dispose();
       void api.closeTerminal(connectionId).catch(() => {});
     };

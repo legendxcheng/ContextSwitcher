@@ -134,5 +134,7 @@
   "task.title_placeholder": "输入任务标题",
   "task.prompt": "提示词",
   "task.prompt_placeholder": "写提示词… 输入 @ 引用文件，输入 $ 引用技能",
-  "task.edit_dialog": "编辑任务"
+  "task.edit_dialog": "编辑任务",
+  "terminal.scroll_invalid": "滚轮事件超出终端范围，请重试。",
+  "terminal.scroll_stale_size": "终端尺寸正在更新，请重试。"
 }

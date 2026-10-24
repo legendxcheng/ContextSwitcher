@@ -68,6 +68,7 @@ kanban/
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
 │  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次
+│  ├─ terminalScroll.ts           连接级滚轮换算、有界队列、字符区命中与失效清理
 │  ├─ terminalAppearance.ts        本机 WezTerm 外观预设：字体、光标、ANSI 色板
 │  ├─ terminalFontSize.ts           字号快捷键识别、上下限及本机偏好保存
 │  ├─ BindingDialog.tsx            显式修复独占绑定，不发送提示词
@@ -268,6 +269,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
 | `terminal_open` | taskId、connectionId、cols、rows、output Channel | 从任务解析有效目标；创建控制流 |
 | `terminal_input` | connectionId、data | 再核验任务、绑定及身份后转发输入 |
+| `terminal_scroll` | connectionId、event | 核验任务身份、字符坐标、网格尺寸后批量转发单行滚动 |
 | `terminal_resize` | connectionId、cols、rows | 有界尺寸更新 |
 | `terminal_ack` | connectionId、bytes | 渲染消费确认，释放输出配额 |
 | `terminal_close` | connectionId | 只释放指定查看连接 |
@@ -386,6 +388,12 @@ sequenceDiagram
 **执行及落库。** CLI 用参数数组执行，不通过 shell 拼接；常规请求超时 12 秒，Agent 启动外层超时 40 秒（Herdr 启动默认 30 秒），stdout/stderr 各限 4 MiB。操作 ID 防止重复提交，未知结果须人工核实。Windows Codex 使用 `pane send-text` 发送正文，再核验目标身份，然后用 `agent send-keys right enter` 结束粘贴缓冲并提交；不叠加 `agent prompt` 的定时 Enter。其他平台/Agent 仍用 `agent prompt`。正文发送后任何错误都视为 unknown，不能自动重发。返回成功意味着 Herdr 控制接口确认了输入请求且数据库提交成功，不代表 Agent 已完成业务。
 
 ### 6.5 右侧终端与恢复
+
+2026-10-24 滚轮修复（GitHub #21）：`TerminalPanel → terminalScroll.ts → terminal_scroll → TerminalManager::scroll` 将字符区滚轮送到 Herdr。常见一格（3 行或 120 CSS px）对应 6 行；触控板像素小数累积，反向时清空旧积累，步长不依赖字号。单批上限 24 行、队列上限 16 批，相邻同方向、位置和修饰键相同的批次合并并封顶，8ms 后发送且不因持续输入无限延后。标题及字符区外不转发；字符区阻止 xterm 本地滚动和页面重复处理。不转发鼠标点击。
+
+后端每批只核验一次任务/绑定/进程身份，并校验字符坐标、修饰键及网格尺寸；持有同一个写锁，将 N 行发送为 N 条 `lines:1` 的 `terminal.scroll`。这是因为 Herdr 的应用鼠标报告/alternate-scroll 路径忽略单条命令的 `lines` 放大值。尺寸改变时暂停并清空滚轮队列，串行同步最终尺寸；输出包仅在完整帧的末片附带 cols/rows，前端等尺寸同步成功且 xterm 已完成匹配网格的渲染后才恢复滚轮。切任务、项目、断线或卸载清空待发送动作；过期尺寸拒绝，不重放。无数据库迁移。
+
+隔离验收可显式设置 `KANBAN_HERDR_EXECUTABLE`；未设置仍使用当前安装路径，显式错误路径不静默回退。真实 Windows Tauri/WebView2 + Herdr 0.9.5 + Codex CLI 验证了一格六行、反向、字号/面板宽度变化、项目切换、键盘和断线重连；已安装 Herdr 0.8 的独立 session 另验证宿主历史 0→6→0。实际系统 DPI 切换未执行，未替换用户运行中的二进制。详细证据及自动化边界见[滚轮验收记录](docs/verification/2026-10-24-kanban-terminal-scroll.md)。
 
 终端外观由 `terminalAppearance.ts` 集中配置，采用 2026-10-24 本机 WezTerm 配置快照：Catppuccin Mocha 完整 16 色 ANSI 色板、背景 `#1e1e2e`、前景 `#cdd6f4`，字体依次为 Cascadia Code / Noto Sans SC / Microsoft YaHei / monospace；13pt 换算为约 17.33 CSS px，行高 1.05，常亮竖线光标。面板标题、边框和内边距在 `App.css` 对齐主题。这是静态外观预设，不会自动读取或同步后续 Lua 配置；字体依赖本机安装，WebView 的字体回退字重、抗锯齿和连字效果不等同于 WezTerm 原生渲染。
 

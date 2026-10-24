@@ -2,10 +2,10 @@ mod commands;
 mod db;
 mod herdr;
 mod lifecycle;
-mod start;
 mod models;
 mod project_commands;
 mod projects;
+mod start;
 mod tasks;
 mod terminal;
 mod work_commands;
@@ -78,6 +78,7 @@ pub fn run() {
             work_commands::terminal_open,
             work_commands::terminal_close,
             work_commands::terminal_input,
+            work_commands::terminal_scroll,
             work_commands::terminal_resize,
             work_commands::terminal_ack,
             commands::pick_folder,

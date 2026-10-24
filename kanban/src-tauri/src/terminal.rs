@@ -22,13 +22,33 @@ pub struct Output {
     pub kind: &'static str,
     pub data: Vec<u8>,
     pub message: String,
+    pub cols: u16,
+    pub rows: u16,
 }
 pub type Sink = Arc<dyn Fn(Output) -> bool + Send + Sync>;
+
+#[derive(serde::Deserialize)]
+pub struct ScrollEvent {
+    pub column: u16,
+    pub row: u16,
+    pub cols: u16,
+    pub rows: u16,
+    pub modifiers: u8,
+    pub direction: ScrollDirection,
+    pub lines: u16,
+}
+#[derive(serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScrollDirection {
+    Up,
+    Down,
+}
 
 struct Attachment {
     task: String,
     target: Target,
     writer: Mutex<ChildStdin>,
+    size: Mutex<(u16, u16)>,
     child: Arc<Mutex<Child>>,
     stopped: AtomicBool,
     unacked: AtomicUsize,
@@ -67,6 +87,8 @@ impl Attachment {
             kind: "closed",
             data: vec![],
             message: message.into(),
+            cols: 0,
+            rows: 0,
         });
     }
     fn command(&self, value: Value) -> Result<(), String> {
@@ -192,6 +214,7 @@ impl TerminalManager {
             task: task.into(),
             target,
             writer: Mutex::new(writer),
+            size: Mutex::new((cols, rows)),
             child: Arc::new(Mutex::new(child)),
             stopped: AtomicBool::new(false),
             unacked: AtomicUsize::new(0),
@@ -261,7 +284,7 @@ impl TerminalManager {
                     let _ = ready_tx.try_send(Ok(()));
                     first = false;
                 }
-                for chunk in bytes.chunks(8192) {
+                for (index, chunk) in bytes.chunks(8192).enumerate() {
                     let start = Instant::now();
                     while output.unacked.load(Ordering::SeqCst) >= 128 * 1024 {
                         if output.stopped.load(Ordering::SeqCst) {
@@ -281,6 +304,17 @@ impl TerminalManager {
                         kind: "data",
                         data: chunk.to_vec(),
                         message: String::new(),
+                        // Mark geometry only after the entire frame has been rendered.
+                        cols: if (index + 1) * 8192 >= bytes.len() {
+                            frame["width"].as_u64().unwrap_or(0) as u16
+                        } else {
+                            0
+                        },
+                        rows: if (index + 1) * 8192 >= bytes.len() {
+                            frame["height"].as_u64().unwrap_or(0) as u16
+                        } else {
+                            0
+                        },
                     }) {
                         output.stop("terminal.closed");
                         return;
@@ -340,8 +374,45 @@ impl TerminalManager {
     }
     pub fn resize(&self, id: &str, cols: u16, rows: u16) -> Result<(), String> {
         check_size(cols, rows)?;
-        self.current(id)?
-            .command(json!({"type":"terminal.resize","cols":cols,"rows":rows}))
+        let a = self.current(id)?;
+        let mut size = a.size.lock().map_err(error)?;
+        a.command(json!({"type":"terminal.resize","cols":cols,"rows":rows}))?;
+        *size = (cols, rows);
+        Ok(())
+    }
+    pub fn scroll(&self, app: &Workflow, id: &str, event: ScrollEvent) -> Result<(), String> {
+        check_size(event.cols, event.rows)?;
+        if event.column >= event.cols
+            || event.row >= event.rows
+            || event.modifiers > 7
+            || !(1..=24).contains(&event.lines)
+        {
+            return Err("terminal.scroll_invalid".into());
+        }
+        let a = self.current(id)?;
+        let target = app.target(&a.task, true).inspect_err(|e| a.stop(e))?;
+        if !target.same_identity(&a.target) {
+            a.stop("binding.identity_changed");
+            return Err("binding.identity_changed".into());
+        }
+        let current = self.current(id)?;
+        let size = current.size.lock().map_err(error)?;
+        if *size != (event.cols, event.rows) {
+            return Err("terminal.scroll_stale_size".into());
+        }
+        let mut writer = current.writer.lock().map_err(error)?;
+        // Herdr ignores `lines` when the application owns the wheel. A batch of
+        // one-line commands gives both host history and mouse-aware apps the
+        // requested amount, without one expensive identity lookup per line.
+        let command = json!({"type":"terminal.scroll", "direction":event.direction,"lines":1,
+            "column":event.column,"row":event.row,"modifiers":event.modifiers});
+        for _ in 0..event.lines {
+            if current.stopped.load(Ordering::SeqCst) {
+                return Err("terminal.stale".into());
+            }
+            writeln!(writer, "{command}").map_err(error)?;
+        }
+        writer.flush().map_err(error)
     }
     pub fn ack(&self, id: &str, bytes: usize) {
         if let Ok(a) = self.current(id) {

@@ -55,7 +55,10 @@ export const dispatchToHerdr = (
 export const resolveDispatch = (taskId: string, operationId: string, sent: boolean, evidence: string) =>
   invoke<void>("resolve_dispatch", { taskId, operationId, sent, evidence });
 export const repairBinding = (taskId: string, paneId: string) => invoke<void>("repair_binding", { taskId, paneId });
-export interface TerminalOutput { kind: "data" | "closed"; data: number[]; message: string }
+export interface TerminalOutput { kind: "data" | "closed"; data: number[]; message: string; cols?: number; rows?: number }
+export interface TerminalCell { column: number; row: number; cols: number; rows: number; modifiers: number }
+export interface TerminalScroll extends TerminalCell { direction: "up" | "down"; lines: number }
+export const scrollTerminal = (connectionId: string, event: TerminalScroll) => invoke<void>("terminal_scroll", { connectionId, event });
 export const openTerminal = (taskId: string, connectionId: string, cols: number, rows: number, onOutput: (packet: TerminalOutput) => void) => {
   const output = new Channel<TerminalOutput>();
   output.onmessage = onOutput;

@@ -134,5 +134,7 @@
   "task.title_placeholder": "Enter a task title",
   "task.prompt": "Prompt",
   "task.prompt_placeholder": "Write a prompt… Use @ to reference files and $ to reference skills",
-  "task.edit_dialog": "Edit task"
+  "task.edit_dialog": "Edit task",
+  "terminal.scroll_invalid": "The scroll event is outside the terminal. Please try again.",
+  "terminal.scroll_stale_size": "The terminal size is changing. Please try again."
 }

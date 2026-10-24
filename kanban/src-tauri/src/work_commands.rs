@@ -191,6 +191,19 @@ pub async fn terminal_input(
         .map_err(|e| e.to_string())?
 }
 #[tauri::command]
+pub async fn terminal_scroll(
+    app: State<'_, Arc<Workflow>>,
+    manager: State<'_, Arc<TerminalManager>>,
+    connection_id: String,
+    event: crate::terminal::ScrollEvent,
+) -> Result<(), String> {
+    let app = app.inner().clone();
+    let manager = manager.inner().clone();
+    tauri::async_runtime::spawn_blocking(move || manager.scroll(&app, &connection_id, event))
+        .await
+        .map_err(|e| e.to_string())?
+}
+#[tauri::command]
 pub async fn terminal_resize(
     manager: State<'_, Arc<TerminalManager>>,
     connection_id: String,
