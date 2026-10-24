@@ -1,7 +1,7 @@
 //! Task persistence shared by IPC commands and workflow guards.
 
 use crate::models::{Task, TaskPriority, TaskStatus};
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 
 fn err(error: impl std::fmt::Display) -> String {
     error.to_string()
@@ -51,6 +51,7 @@ pub fn create(
     project: &str,
     name: &str,
     priority: TaskPriority,
+    prompt: &str,
 ) -> Result<Task, String> {
     let now = chrono::Utc::now().to_rfc3339();
     let task = Task {
@@ -59,7 +60,7 @@ pub fn create(
         name: name.into(),
         status: TaskStatus::Todo,
         priority,
-        prompt_json: "{}".into(),
+        prompt_json: prompt.into(),
         prompt_snapshot: None,
         dispatched_at: None,
         dispatched_to: None,
@@ -162,6 +163,34 @@ mod tests {
     use rusqlite::Connection;
 
     #[test]
+    fn created_prompt_and_mentions_survive_database_reopen() {
+        let path =
+            std::env::temp_dir().join(format!("kanban-task-form-{}.db", uuid::Uuid::new_v4()));
+        let prompt = r#"{"type":"doc","content":[{"type":"paragraph","content":[{"type":"text","text":"检查表单"},{"type":"mention","attrs":{"kind":"file","label":"src/App.tsx","ref":"E:/fixture/src/App.tsx"}},{"type":"mention","attrs":{"kind":"skill","label":"review","ref":"E:/fixture/SKILL.md"}}]}]}"#;
+        let id;
+        {
+            let db = Connection::open(&path).unwrap();
+            crate::db::init(&db).unwrap();
+            db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p','Project','.','workspace','now');").unwrap();
+            let task = create(&db, "p", "完整任务", TaskPriority::Urgent, prompt).unwrap();
+            id = task.id;
+            assert_eq!(task.prompt_json, prompt);
+        }
+        {
+            let db = Connection::open(&path).unwrap();
+            crate::db::init(&db).unwrap();
+            let tasks = list(&db, "p").unwrap();
+            assert_eq!(tasks.len(), 1);
+            assert_eq!(tasks[0].id, id);
+            assert_eq!(tasks[0].name, "完整任务");
+            assert_eq!(tasks[0].priority, TaskPriority::Urgent);
+            assert_eq!(tasks[0].status, TaskStatus::Todo);
+            assert_eq!(tasks[0].prompt_json, prompt);
+        }
+        std::fs::remove_file(path).unwrap();
+    }
+
+    #[test]
     fn upgrading_an_old_database_preserves_data_and_survives_reopen() {
         let path = std::env::temp_dir().join(format!("kanban-cards-{}.db", uuid::Uuid::new_v4()));
         {
@@ -177,7 +206,7 @@ mod tests {
             assert!(old.archived_at.is_none());
             assert_eq!(old.prompt_json, "original prompt");
             assert_eq!(old.prompt_snapshot.as_deref(), Some("snapshot"));
-            create(&db, "p", "New urgent", TaskPriority::Urgent).unwrap();
+            create(&db, "p", "New urgent", TaskPriority::Urgent, "{}").unwrap();
             archive(&mut db, "old").unwrap();
         }
         {
@@ -192,9 +221,10 @@ mod tests {
                 ("original prompt".into(), "snapshot".into(), true)
             );
             assert!(serde_json::from_str::<TaskPriority>("\"critical\"").is_err());
-            assert!(db
-                .execute("UPDATE tasks SET priority='critical'", [])
-                .is_err());
+            assert!(
+                db.execute("UPDATE tasks SET priority='critical'", [])
+                    .is_err()
+            );
         }
         std::fs::remove_file(path).unwrap();
     }
@@ -204,7 +234,7 @@ mod tests {
         let mut db = Connection::open_in_memory().unwrap();
         crate::db::init(&db).unwrap();
         db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p','Project','.','workspace','now');").unwrap();
-        let task = create(&db, "p", "Unresolved", TaskPriority::High).unwrap();
+        let task = create(&db, "p", "Unresolved", TaskPriority::High, "{}").unwrap();
         db.execute("UPDATE tasks SET status='done' WHERE id=?1", [&task.id])
             .unwrap();
         for state in ["pending", "unknown"] {
@@ -232,7 +262,7 @@ mod tests {
         let mut db = Connection::open_in_memory().unwrap();
         crate::db::init(&db).unwrap();
         db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p','Project','.','workspace','now');").unwrap();
-        let task = create(&db, "p", "Keep history", TaskPriority::Urgent).unwrap();
+        let task = create(&db, "p", "Keep history", TaskPriority::Urgent, "{}").unwrap();
         assert_eq!(archive(&mut db, &task.id).unwrap_err(), "archive.only_done");
         db.execute("UPDATE tasks SET status='done' WHERE id=?1", [&task.id])
             .unwrap();
@@ -250,9 +280,9 @@ mod tests {
         let db = Connection::open_in_memory().unwrap();
         crate::db::init(&db).unwrap();
         db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p','Project','.','workspace','now');").unwrap();
-        create(&db, "p", "General", TaskPriority::Normal).unwrap();
-        let important = create(&db, "p", "Important", TaskPriority::High).unwrap();
-        create(&db, "p", "Urgent", TaskPriority::Urgent).unwrap();
+        create(&db, "p", "General", TaskPriority::Normal, "{}").unwrap();
+        let important = create(&db, "p", "Important", TaskPriority::High, "{}").unwrap();
+        create(&db, "p", "Urgent", TaskPriority::Urgent, "{}").unwrap();
         assert_eq!(
             list(&db, "p")
                 .unwrap()

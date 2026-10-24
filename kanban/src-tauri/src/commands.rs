@@ -126,9 +126,10 @@ pub fn create_task(
     project_id: String,
     name: String,
     priority: TaskPriority,
+    prompt_json: Option<String>,
 ) -> Result<Task, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::tasks::create(&conn, &project_id, &name, priority)
+    crate::tasks::create(&conn, &project_id, &name, priority, prompt_json.as_deref().unwrap_or("{}"))
 }
 
 #[tauri::command]

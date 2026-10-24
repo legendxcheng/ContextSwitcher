@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from "react";
 import type { Task, Project, TaskStatus, HerdrAgent } from "./types";
 import { TaskCard } from "./TaskCard";
 import { DispatchDialog } from "./DispatchDialog";
-import { TaskEditPanel } from "./TaskEditPanel";
+import { TaskFormDialog } from "./TaskFormDialog";
 import * as api from "./api";
 import { notify } from "./Toast";
 import { Icon, type IconName } from "./Icon";
@@ -11,7 +11,6 @@ import { TerminalPanel } from "./TerminalPanel";
 import { BindingDialog } from "./BindingDialog";
 import { tr, errorText } from "./i18n";
 import { resolveMentions } from "./dispatchUtils";
-import { TaskCreateDialog } from "./TaskCreateDialog";
 
 interface KanbanBoardProps {
   project: Project;
@@ -134,7 +133,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
       if (
         e.key === "n" &&
         !e.ctrlKey && !e.metaKey && !e.altKey &&
-        !document.querySelector(".dialog-overlay, .slideover") &&
+        !document.querySelector(".dialog-overlay") &&
         !(document.activeElement instanceof HTMLElement && document.activeElement.closest(".terminal-panel")) &&
         !(document.activeElement instanceof HTMLElement && document.activeElement.isContentEditable) &&
         !(document.activeElement instanceof HTMLInputElement) &&
@@ -317,9 +316,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />
-      {creatingTask && <TaskCreateDialog projectId={project.id} onClose={() => setCreatingTask(false)} onCreated={async (task) => {
-        setCreatingTask(false); await load(); setEditingTaskId(task.id);
-      }} />}
+      {creatingTask && <TaskFormDialog project={project} onClose={() => setCreatingTask(false)} onSaved={load} />}
       {pendingDispatch && (
         <DispatchDialog
           key={pendingDispatch.task.id}
@@ -342,7 +339,8 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
       {editingTaskId && (() => {
         const t = tasks.find((x) => x.id === editingTaskId);
         return t ? (
-          <TaskEditPanel
+          <TaskFormDialog
+            key={t.id}
             task={t}
             project={project}
             onClose={() => setEditingTaskId(null)}

@@ -15,8 +15,8 @@ export const deleteProject = (id: string) => invoke<void>("delete_project", { id
 
 // Tasks
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
-export const createTask = (projectId: string, name: string, priority: TaskPriority) =>
-  invoke<Task>("create_task", { projectId, name, priority });
+export const createTask = (projectId: string, name: string, priority: TaskPriority, promptJson: string) =>
+  invoke<Task>("create_task", { projectId, name, priority, promptJson });
 export const updateTask = (id: string, name: string, promptJson: string, priority: TaskPriority) =>
   invoke<void>("update_task", { id, name, promptJson, priority });
 export const updateTaskStatus = (id: string, status: string) =>

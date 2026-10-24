@@ -1,6 +1,6 @@
 # Kanban 代码结构与关键流程分析
 
-更新日期：2026-10-24（补充紧凑卡片、顶部新建表单、优先级排序与完成归档；保留自动流转与终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-24（统一新建/编辑任务居中表单与提示词创建；保留卡片、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 ## 1. 项目定位与架构边界
 
@@ -56,9 +56,8 @@ kanban/
 │  ├─ ProjectFormDialog.tsx        项目表单、目录选择、CS 任务关联
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
 │  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
-│  ├─ TaskCreateDialog.tsx         顶部按钮与 N 打开的名称/优先级创建表单
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
-│  ├─ TaskEditPanel.tsx            名称、优先级和提示词编辑侧栏
+│  ├─ TaskFormDialog.tsx           新建/编辑共用居中弹窗：标题、提示词、优先级
 │  ├─ PromptEditor.tsx             Tiptap 初始化与 JSON 输出
 │  ├─ MentionNode.ts              自定义原子行内 mention 节点
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
@@ -135,9 +134,9 @@ flowchart TD
     ProjectSidebar --> ProjectFormDialog
     App --> KanbanBoard
     KanbanBoard --> TaskCard
-    KanbanBoard --> TaskEditPanel
+    KanbanBoard --> TaskFormDialog
     KanbanBoard --> DispatchDialog
-    TaskEditPanel --> PromptEditor
+    TaskFormDialog --> PromptEditor
     PromptEditor --> MentionPopover
     PromptEditor --> MentionNode
     DispatchDialog --> resolveMentions
@@ -150,7 +149,7 @@ flowchart TD
 | [ProjectFormDialog.tsx](kanban/src/ProjectFormDialog.tsx) | 名称、根目录、workspace、CS task ID、保存状态和错误 | 创建/更新项目、选择目录、读取 CS 任务 |
 | [KanbanBoard.tsx](kanban/src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
 | [TaskCard.tsx](kanban/src/TaskCard.tsx) | 展示名称、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
-| [TaskEditPanel.tsx](kanban/src/TaskEditPanel.tsx) | 名称、优先级与提示词草稿、saving | 显式保存；取消、遮罩、Esc 直接关闭 |
+| [TaskFormDialog.tsx](kanban/src/TaskFormDialog.tsx) | 标题、提示词、优先级草稿及保存/错误状态 | 新建一次创建完整任务；编辑显式保存；失败保留草稿并恢复焦点 |
 | [PromptEditor.tsx](kanban/src/PromptEditor.tsx) | Tiptap Editor 实例 | 接收 JSON 字符串；每次编辑输出序列化 JSON |
 | [MentionPopover.tsx](kanban/src/MentionPopover.tsx) | 搜索词、引用种类、候选项、选择下标、展开状态 | 查询文件/技能；写入编辑器 transaction |
 | [DispatchDialog.tsx](kanban/src/DispatchDialog.tsx) | Agent 列表、选中 pane、loading、错误、预览文本 | 重新查 Agent、展开引用、派发 |
@@ -162,9 +161,9 @@ flowchart TD
 
 ### 3.1 样式与交互实现
 
-[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 200px，1100px 及以下窗口收为 180px，品牌、底部留白和纵向项目操作按钮适应窄侧栏。左侧三列 grid 等宽、每列至少 180px、间距 8px，看板内容左右留白 12px。右侧终端从窗口内容区顶部贯通到底部，默认占整个应用内容宽度的 1/3，侧栏、看板及分隔线合计占 2/3。首次测量前通过 CSS viewport 宽度保留相同比例；ResizeObserver 在未手调时持续维护默认比例。分隔线支持拖动和方向键，手调后保持像素宽度并随窗口缩小约束上限；最小终端 280px，左侧看板至少 320px。切项目重置默认宽度，不跨重启保存。项目面包屑、目录、任务工具栏与 Agent 派发栏均位于左侧看板，终端标题和连接状态合并为单行。左侧根据自身宽度收起辅助文字。空间不足时仅三列区域横向滚动；编辑侧栏宽 520px，保留 `max-width` 限制。动画包括侧栏滑入、遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
+[App.css](kanban/src/App.css) 集中定义深色中性色阶、语义色、间距、圆角以及组件样式。2026-10-24 界面调整借鉴 [Supabase 官网](https://supabase.com/) 的中性色、绿色强调、细边框和留白，在现有深色界面上实现：炭灰背景、`#3ecf8e` 主色、6/8px 圆角；根字号为 16px，任务标题、列标题与编辑正文为 16px，操作按钮和辅助文字为 14px，紧凑状态标签为 12px；侧栏宽度 200px，1100px 及以下窗口收为 180px，品牌、底部留白和纵向项目操作按钮适应窄侧栏。左侧三列 grid 等宽、每列至少 180px、间距 8px，看板内容左右留白 12px。右侧终端从窗口内容区顶部贯通到底部，默认占整个应用内容宽度的 1/3，侧栏、看板及分隔线合计占 2/3。首次测量前通过 CSS viewport 宽度保留相同比例；ResizeObserver 在未手调时持续维护默认比例。分隔线支持拖动和方向键，手调后保持像素宽度并随窗口缩小约束上限；最小终端 280px，左侧看板至少 320px。切项目重置默认宽度，不跨重启保存。项目面包屑、目录、任务工具栏与 Agent 派发栏均位于左侧看板，终端标题和连接状态合并为单行。左侧根据自身宽度收起辅助文字。空间不足时仅三列区域横向滚动；任务新建/编辑弹窗通过 Portal 挂载至 body，相对整个窗口居中，宽 720px、最大宽度 94vw、最大高度 calc(100dvh - 48px)，正文区滚动而头尾固定。弹窗打开时应用根节点 inert，Tab 在表单内循环，关闭后恢复入口焦点。动画包括遮罩淡入、Toast 滑入和加载旋转，并响应系统减少动效设置。
 
-`App` 负责项目侧栏与主区域，`KanbanBoard` 在左侧渲染工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及打开创建表单的顶部新建按钮。Agent 派发区取消整体低透明度。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、编辑侧栏、派发对话框、引用候选与通知使用同一套主题。
+`App` 负责项目侧栏与主区域，`KanbanBoard` 在左侧渲染工作空间面包屑和项目目录层级；`ProjectSidebar` 增加品牌区、项目数量与明确的新建入口，项目选择使用原生按钮；`KanbanBoard` 增加任务总数、完成数量及打开创建表单的顶部新建按钮。Agent 派发区取消整体低透明度。`Icon.tsx` 提供本地 SVG 线性图标，替换看板空态与项目操作的字符图标，不加载远程字体或样式。任务卡片、项目表单、任务表单弹窗、派发对话框、引用候选与通知使用同一套主题。
 
 此前主题调整的浏览器模拟检查仅证明界面行为。本次补充了隔离 SQLite、真实 Tauri/WebView2 与 Windows Herdr 的终端输入和生命周期验收；见第 9 节及验收记录。
 
@@ -195,7 +194,7 @@ flowchart TD
 | --- | --- |
 | `id`、`project_id` | 卡片主键及所属项目；SQL 声明项目外键 |
 | `name`、`status` | 名称与 `todo / in_progress / done` 三态 |
-| `prompt_json` | Tiptap 文档的 JSON 字符串；新卡默认 `"{}"` |
+| `prompt_json` | Tiptap 文档的 JSON 字符串；新建表单直接提交正文，旧 IPC 调用省略 promptJson 时兼容 `"{}"` |
 | `prompt_snapshot` | 最近一次成功派发时实际发送的展开文本，可为空 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
 | `priority` | normal / high / urgent，显示一般 / 优先 / 紧急；默认 normal，SQL CHECK 与 IPC 枚举拒绝非法值 |
@@ -234,7 +233,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_project` | id + 项目字段 | 更新项目，返回空 |
 | `delete_project` | id | 删除项目；卡片清理由外键级联负责 |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
-| `create_task` | projectId、name、priority | 创建 todo 卡片并返回 Task |
+| `create_task` | projectId、name、priority、可选 promptJson | 单条 INSERT 保存标题、提示词、优先级，创建 todo 卡片并返回 Task；省略正文兼容 `{}` |
 | `update_task` | id、name、promptJson、priority | 更新名称、正文、优先级及 updated_at；拒绝归档任务 |
 | `update_task_status` | id、status | todo 直接更新；done 兼容入口转完整完成工作流；拒绝直接 in_progress |
 | `start_task` | taskId、promptText、operationId | 自动预占/创建 pane，启动或精确恢复 Codex；首次发送后才进入开发中 |
@@ -276,15 +275,15 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 
 ### 6.2 创建、编辑和移动卡片
 
-1. 顶部“新建任务”按钮或 N 打开 `TaskCreateDialog`；列底部没有新增输入区域。表单填写名称、选择优先级后调用 `create_task`。创建失败保留草稿，取消不创建；再次打开默认一般。
-2. Rust 插入默认 todo 卡片，前端重新加载并用新 ID 打开 `TaskEditPanel`。
+1. 顶部“新建任务”按钮或 N 打开 `TaskFormDialog`；列底部没有新增输入区域。字段顺序为标题（必填）、提示词（可空）、优先级（默认一般），提示词复用 Tiptap 的 @ 文件/$ 技能引用。调用 `create_task` 一次提交三个字段。创建失败保留完整草稿并恢复标题焦点，取消不创建；再次打开清空草稿并恢复一般优先级。
+2. Rust 使用单条 INSERT 保存完整 todo 卡片，前端关闭新建弹窗并重新加载，不再自动打开编辑。数据库复用已有 prompt_json 字段，无新增迁移。
 3. Tiptap 编辑内容经 `getJSON()` 序列化到面板草稿。
-4. 显式保存调用 `update_task`，同时保存名称、优先级和提示词，成功后关闭侧栏、刷新看板。同列按优先级重排，保留有效的当前终端选择。
+4. 点击卡片编辑入口打开同一 `TaskFormDialog`（以任务 ID 为 key）；显式保存调用 `update_task`，同时保存标题、提示词和优先级，成功后关闭弹窗、刷新看板。同列按优先级重排，保留有效的当前终端选择。
 5. 卡片拖到“开发中”时直接调用 `start_task`，自动分配窗口；首次执行展开已保存提示词并发送，已保存会话或保留原绑定的任务只恢复/连接、不重发。成功后重新查询并选中该任务。拖到“完成”及完成按钮统一走 `complete_task`，关闭失败也刷新完成状态并显示清理警告。拖到“未开发”调用 `update_task_status`；拖到原列不执行更新。任务流转期间禁用该卡片操作和拖拽，并用同步 Set 阻止重复请求。
 
 列之间允许迁移，包括 done 回 todo；从 todo 或 done 拖入 in_progress 自动启动或恢复，无派发确认弹窗。同一列不提供手动排序；统一由后端按紧急、优先、一般，再按创建时间和 ID 排序。“标记完成”按钮只出现在 in_progress 卡片；拖放可以把任意状态卡片直接移到 done。
 
-看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，打开顶部创建表单；表单 Enter 提交，Escape 取消，提交中禁用重复操作与取消。全局快捷键排除 input、select、textarea、contenteditable、已有弹层和右侧终端，终端键盘事件不冒泡至看板。
+看板快捷键是无 Ctrl/Meta/Alt 修饰的小写 `n`，打开顶部创建表单；标题框 Enter 提交，提示词内 Enter 换行；中文输入法确认不提交。Escape 取消，引用候选打开时先关闭候选。提交中锁定全部字段与取消/关闭入口，并用同步标记阻止重复提交；失败保留草稿。全局快捷键排除 input、select、textarea、contenteditable、已有弹层和右侧终端，终端键盘事件不冒泡至看板。
 
 ### 6.2.1 紧凑卡片与归档
 
@@ -299,6 +298,8 @@ CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自
 ### 6.3 @ 文件与 $ 技能引用
 
 `PromptEditor → MentionPopover → searchFiles/searchSkills → 选择候选 → 插入 MentionNode → prompt_json`。
+
+引用候选通过 Portal 挂载至 body，使用 fixed 定位跟随光标，并约束在窗口内；监听编辑器内容/选择、滚动和窗口尺寸变化。长提示词顶部或中部的候选不会被表单滚动区裁剪。键盘捕获阶段处理方向键、Enter/Tab 选择和 Escape 关闭，避免编辑器抢先换行；中文输入法组合期间不消费这些选择键。
 
 节点保存的是引用位置，不是引用正文：
 
@@ -469,7 +470,7 @@ npm run tauri build
 1. `types.ts → models.rs → db.rs`：厘清 Project、Task、引用和派发快照。
 2. `main.tsx → App.tsx → KanbanBoard.tsx`：理解页面和状态归属。
 3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/lifecycle.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
-4. `TaskEditPanel → PromptEditor → MentionNode/MentionPopover`：理解 prompt_json 如何产生。
+4. `TaskFormDialog → PromptEditor → MentionNode/MentionPopover`：理解新建/编辑共用草稿及 prompt_json 如何产生。
 5. `DispatchDialog → dispatchUtils → dispatch_to_herdr`：理解“草稿、预览、实际发送、快照”之间的差异。
 6. `ProjectFormDialog → read_cs_tasks → 主项目 Task.to_dict()`：核对跨项目数据契约。
 
@@ -481,3 +482,5 @@ npm run tauri build
 2026-10-24 自动流转增量：[GitHub #10](https://github.com/legendxcheng/ContextSwitcher/issues/10) 已发布并实装。新增 task_sessions/lifecycle_operations 和自动启动、完成、核实 IPC；结构与交互变化见 4–6 节。验证：28 项 Rust 测试通过、2 项已有 live 测试未执行；40 项前端测试与生产构建通过，保留既有大 chunk 提示。包括真实 SQLite 文件关闭重开后的会话恢复、并发独占、未知派发不重发、关闭超时、会话 ID 缺失、身份替换、恢复落库失败及迟到核实保护。本次未执行真实 Windows Tauri/Herdr/Codex 生命周期验收，未重启用户正在使用的应用。详见 [自动流转验证记录](docs/verification/2026-10-24-kanban-auto-flow.md)。
 
 2026-10-24 卡片增量来源：[GitHub #12](https://github.com/legendxcheng/ContextSwitcher/issues/12)。用户随后明确只保留顶部新建入口。实现及验证边界见[卡片验收记录](docs/verification/2026-10-24-kanban-cards.md)。
+
+2026-10-24 任务表单统一增量：新建与编辑共用居中弹窗及三个字段；创建接口一次保存提示词，旧调用省略正文仍兼容。验收基于 1420b27 加本次变更的隔离快照，49 项前端测试、37 项 Rust 测试、类型检查与生产构建通过，2 项已有 Herdr live 测试未执行，保留既有大 chunk 提示。真实 Windows Tauri/WebView2 + 隔离 SQLite 验证了创建、文件引用、编辑、刷新读回、旧 IPC 兼容，以及 900×600/1280×800 居中布局；浏览器模拟 IPC 另覆盖 1920×1080、长正文引用、失败草稿、键盘和英文界面。未重新打包安装，未执行任务派发；详见[任务表单验收记录](docs/verification/2026-10-24-kanban-task-form.md)。

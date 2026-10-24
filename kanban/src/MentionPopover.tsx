@@ -1,5 +1,6 @@
 import { useCurrentEditor } from "@tiptap/react";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import { createPortal } from "react-dom";
 import * as api from "./api";
 import type { FileEntry, SkillEntry } from "./types";
 
@@ -22,6 +23,35 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
   const [query, setQuery] = useState("");
   const [kind, setKind] = useState<"file" | "skill">("file");
   const boxRef = useRef<HTMLDivElement>(null);
+  const [position, setPosition] = useState({ left: 0, top: 0 });
+
+  useLayoutEffect(() => {
+    if (!editor || !open || items.length === 0) return;
+    const positionAtCursor = () => {
+      const box = boxRef.current;
+      if (!box || editor.isDestroyed) return;
+      const cursor = editor.view.coordsAtPos(editor.state.selection.from);
+      const size = box.getBoundingClientRect();
+      const left = Math.max(8, Math.min(cursor.left, window.innerWidth - size.width - 8));
+      const below = cursor.bottom + 4;
+      const top = Math.max(8, Math.min(
+        below + size.height <= window.innerHeight - 8 ? below : cursor.top - size.height - 4,
+        window.innerHeight - size.height - 8,
+      ));
+      setPosition({ left, top });
+    };
+    positionAtCursor();
+    editor.on("selectionUpdate", positionAtCursor);
+    editor.on("update", positionAtCursor);
+    window.addEventListener("resize", positionAtCursor);
+    window.addEventListener("scroll", positionAtCursor, true);
+    return () => {
+      editor.off("selectionUpdate", positionAtCursor);
+      editor.off("update", positionAtCursor);
+      window.removeEventListener("resize", positionAtCursor);
+      window.removeEventListener("scroll", positionAtCursor, true);
+    };
+  }, [editor, open, items]);
 
   // Watch editor selection for trigger chars
   useEffect(() => {
@@ -89,23 +119,31 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
   useEffect(() => {
     if (!editor || !open) return;
     const handler = (e: KeyboardEvent) => {
-      if (!open || items.length === 0) return;
+      if (e.isComposing) return;
+      if (e.key === "Escape") {
+        e.preventDefault();
+        e.stopPropagation();
+        setOpen(false);
+        return;
+      }
+      if (items.length === 0) return;
       if (e.key === "ArrowDown") {
         e.preventDefault();
+        e.stopPropagation();
         setIndex((i) => (i + 1) % items.length);
       } else if (e.key === "ArrowUp") {
         e.preventDefault();
+        e.stopPropagation();
         setIndex((i) => (i - 1 + items.length) % items.length);
       } else if (e.key === "Enter" || e.key === "Tab") {
         e.preventDefault();
+        e.stopPropagation();
         insertMention(items[index]);
-      } else if (e.key === "Escape") {
-        e.preventDefault();
-        setOpen(false);
       }
     };
-    editor.view.dom.addEventListener("keydown", handler);
-    return () => editor.view.dom.removeEventListener("keydown", handler);
+    // Consume suggestion keys before ProseMirror turns Enter into a new paragraph.
+    editor.view.dom.addEventListener("keydown", handler, true);
+    return () => editor.view.dom.removeEventListener("keydown", handler, true);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [editor, open, items, index]);
 
@@ -132,8 +170,8 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
 
   if (!open || items.length === 0) return null;
 
-  return (
-    <div ref={boxRef} className="mention-popover">
+  return createPortal(
+    <div ref={boxRef} className="mention-popover" style={position}>
       {items.map((s, i) => (
         <div
           key={s.ref}
@@ -146,6 +184,6 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
           {s.description && <span className="mention-desc">{s.description}</span>}
         </div>
       ))}
-    </div>
+    </div>, document.body,
   );
 }
