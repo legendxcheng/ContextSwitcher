@@ -1,4 +1,12 @@
 {
+  "flow.kanban_tab_ambiguous": "This workspace has multiple kanban tabs. Keep one tab with that name, then retry.",
+  "agent_status.working": "Running",
+  "agent_status.blocked": "Waiting for feedback / approval",
+  "agent_status.done": "Turn finished, awaiting review",
+  "agent_status.idle": "Idle, ready for input",
+  "agent_status.unknown": "Unknown / unavailable",
+  "agent_status.not_started": "Not started",
+  "agent_status.closed": "Session closed",
   "binding.occupied": "Owned by another task",
   "binding.refresh": "Refresh agents",
   "binding.prepare": "Prepare a separate agent in Herdr, then refresh.",

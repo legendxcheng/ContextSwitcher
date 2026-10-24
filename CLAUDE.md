@@ -116,3 +116,66 @@ ContextSwitcher is a Windows desktop application designed for developers to mana
 
 ### Build System
 使用PyInstaller打包成单文件可执行程序，配置文件为 `ContextSwitcher.spec`。
+
+---
+
+## Herdr Kanban 子项目 (`kanban/`)
+
+### 项目概述
+`kanban/` 是一个独立的 Tauri 2 + React 19 + TypeScript 桌面应用，作为 ContextSwitcher 的可视化看板前端。核心设计理念：**ContextSwitcher 的一个 Task = 一个 Workspace = 一个 Kanban Project**。
+
+### Tech Stack
+- **前端**: React 19 + TypeScript + Vite, CSS custom properties token system (dark theme)
+- **后端**: Tauri 2 (Rust), SQLite via rusqlite (bundled), rfd (native folder picker)
+- **富文本编辑**: Tiptap 3，支持 `@file` 和 `$skill` mention
+- **数据存储**: `%APPDATA%\herdr-kanban\kanban.db`
+
+### Build and Development
+- **开发模式**: `npm run tauri dev` (在 `kanban/` 目录)
+- **类型检查**: `npx tsc --noEmit`
+- **Rust检查**: `cd src-tauri && cargo check`
+- **构建**: `npm run tauri build`
+
+### 数据模型
+
+#### Project (看板项目 = CS任务 = Workspace)
+- `id`, `name`, `root_path`, `herdr_workspace`, `cs_task_id` (关联 ContextSwitcher 任务), `created_at`
+
+#### Task (看板卡片)
+- `id`, `project_id`, `name`, `status` (todo/in_progress/done), `prompt_json` (Tiptap JSON), `prompt_snapshot`, `dispatched_at`, `dispatched_to`, `created_at`, `updated_at`
+
+### 前端组件结构 (`kanban/src/`)
+- **`App.tsx`**: 根组件，挂载 `ToastContainer`，管理项目列表和选中状态
+- **`ProjectSidebar.tsx`**: 左侧项目列表，新建/编辑通过 `ProjectFormDialog` 弹窗
+- **`ProjectFormDialog.tsx`**: 新建/编辑项目对话框，含浏览按钮选择本地目录、CS任务关联选择器
+- **`KanbanBoard.tsx`**: 三列看板 (Todo/In Progress/Done)，支持拖拽、键盘快捷键 `N` 新建任务
+- **`TaskCard.tsx`**: 只读卡片视图，点击编辑打开 `TaskEditPanel`
+- **`TaskEditPanel.tsx`**: 右侧 slide-over 面板，编辑任务名称和 Tiptap prompt
+- **`PromptEditor.tsx`**: Tiptap 富文本编辑器，`@` 触发文件搜索，`$` 触发 skill 搜索
+- **`Toast.tsx`**: 全局 toast 通知，`notify(message, kind)` 函数可在任意组件调用
+- **`api.ts`**: 所有 Tauri invoke 调用的封装
+- **`types.ts`**: TypeScript 接口定义
+
+### Rust 命令 (`kanban/src-tauri/src/`)
+- `commands.rs`: 所有 `#[tauri::command]` 实现
+  - `list/create/update/delete_project`: 项目 CRUD，含 `cs_task_id` 字段
+  - `list/create/update/update_status/delete_task`: 任务 CRUD
+  - `search_files`, `search_skills`, `read_file_content`, `read_skill_content`: 文件/Skill发现
+  - `herdr_list_agents`, `dispatch_to_herdr`: Herdr CLI 集成
+  - `pick_folder`: rfd 原生文件夹选择对话框
+  - `read_cs_tasks`: 读取 `%APPDATA%\ContextSwitcher\tasks.json` 返回 CS 任务列表
+- `db.rs`: SQLite 初始化，含 `ALTER TABLE` 迁移（幂等）
+- `models.rs`: `Project`, `Task`, `TaskStatus`, `CsTask`, `DispatchRecord` 数据结构
+
+### ContextSwitcher 集成
+- `cs_task_id` 字段关联 Project 和 CS Task
+- `read_cs_tasks` 命令解析 CS tasks.json (v1.4.0格式)，提取 `herdr_binding.label` 作为 herdr workspace
+- `ProjectFormDialog` 展示 CS 任务列表供用户关联
+
+### UI/UX 设计
+- **Dark theme**: OKLCH-inspired 中性色阶 (--n0~--n9) + 蓝色 accent (#5a8fd4)
+- **字体**: base 15px，body measure 45-75字符
+- **Slide-over 面板**: 任务编辑不再展开卡片，从右侧滑入
+- **空状态**: 每列有图标和提示文字
+- **拖拽**: 拖拽时卡片半透明，目标列高亮
+- **Toast通知**: 操作成功/失败的全局反馈

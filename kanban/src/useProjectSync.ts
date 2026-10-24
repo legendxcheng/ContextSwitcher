@@ -11,18 +11,28 @@ export function useProjectSync() {
   const mounted = useRef(false);
   const running = useRef<Promise<void> | null>(null);
   const repeat = useRef(false);
-  const refresh = useCallback(() => {
+  const initialized = useRef(false);
+  const reloadLocal = useRef(false);
+  const sync = useCallback((localChanged = false) => {
+    reloadLocal.current ||= localChanged;
     if (running.current) { repeat.current = true; return running.current; }
     const run = async () => {
       do {
         repeat.current = false;
         if (mounted.current) setSyncing(true);
-        // Read local state first: a slow or unavailable Herdr never hides local tasks.
-        try { const cached = await api.listProjects(); if (mounted.current) setProjects(cached); }
-        catch (e) { if (mounted.current) setError(errorText(e)); }
+        // Seed from durable navigation once. Local CRUD can explicitly reload it even
+        // while offline; routine focus/timer sync keeps the current view until success.
+        const readLocal = !initialized.current || reloadLocal.current;
+        reloadLocal.current = false;
+        if (readLocal) {
+          try {
+            const cached = await api.listProjects();
+            if (mounted.current && !repeat.current) { setProjects(cached); initialized.current = true; }
+          } catch (e) { if (mounted.current) setError(errorText(e)); }
+        }
         try {
           const result = await api.syncProjects();
-          if (mounted.current && !repeat.current) { setProjects(result.projects); setOperations(result.operations); setError(""); }
+          if (mounted.current && !repeat.current) { setProjects(result.projects); setOperations(result.operations); setError(""); initialized.current = true; }
         } catch (e) {
           if (mounted.current) setError(`${tr("workspace.offline")} ${errorText(e)}`);
           try { const pending = await api.workspaceOperations(); if (mounted.current) setOperations(pending); } catch { /* Keep last durable operation view. */ }
@@ -33,13 +43,14 @@ export function useProjectSync() {
     running.current = run().finally(() => { running.current = null; });
     return running.current;
   }, []);
+  const refresh = useCallback(() => sync(true), [sync]);
   useEffect(() => {
     mounted.current = true;
-    void refresh();
-    const focus = () => { void refresh(); };
-    const timer = window.setInterval(() => { if (document.visibilityState === "visible" && !running.current) void refresh(); }, 15000);
+    void sync();
+    const focus = () => { void sync(); };
+    const timer = window.setInterval(() => { if (document.visibilityState === "visible" && !running.current) void sync(); }, 15000);
     window.addEventListener("focus", focus);
     return () => { mounted.current = false; window.clearInterval(timer); window.removeEventListener("focus", focus); };
-  }, [refresh]);
+  }, [sync]);
   return { projects, operations, syncing, error, refresh };
 }

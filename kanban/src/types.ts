@@ -65,6 +65,8 @@ export interface SkillEntry {
 }
 
 export interface HerdrAgent {
+  verified_task_id?: string | null;
+  target?: HerdrTarget;
   occupied_by?: string | null;
   name: string;
   status: string;

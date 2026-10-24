@@ -10,6 +10,236 @@ struct FakeHerdr {
     reject_create: Mutex<bool>,
     session_name: Option<String>,
 }
+
+fn navigation_workspace(id: &str) -> Workspace {
+    Workspace {
+        id: id.into(),
+        name: id.into(),
+        directory: Some(".".into()),
+    }
+}
+
+#[test]
+fn navigation_cache_survives_upgrade_reopen_and_offline_without_resurrecting_closed_projects() {
+    let path = std::env::temp_dir().join(format!("kanban-navigation-{}.db", uuid::Uuid::new_v4()));
+    let db = Connection::open(&path).unwrap();
+    crate::db::init(&db).unwrap();
+    // Recreate the previous schema and an unlinked legacy project before upgrading.
+    db.execute_batch("ALTER TABLE projects DROP COLUMN workspace_order; DELETE FROM schema_migrations WHERE version=8;
+        INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('legacy','Legacy','.','Legacy','old');").unwrap();
+    crate::db::init(&db).unwrap();
+    let herdr = Arc::new(FakeHerdr::default());
+    *herdr.spaces.lock().unwrap() = vec![
+        navigation_workspace("a"),
+        navigation_workspace("b"),
+        navigation_workspace("c"),
+    ];
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    service.sync().unwrap();
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("c"), navigation_workspace("a")];
+    let expected = service
+        .sync()
+        .unwrap()
+        .projects
+        .iter()
+        .map(|p| p.id.clone())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        service
+            .sync()
+            .unwrap()
+            .projects
+            .iter()
+            .map(|p| p.name.clone())
+            .collect::<Vec<_>>(),
+        vec!["c", "a", "Legacy"]
+    );
+    drop(service);
+    let db = Connection::open(&path).unwrap();
+    crate::db::init(&db).unwrap();
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    assert_eq!(
+        visible_list(&service.db.lock().unwrap())
+            .unwrap()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    *herdr.offline.lock().unwrap() = true;
+    assert!(service.sync().is_err());
+    assert_eq!(
+        visible_list(&service.db.lock().unwrap())
+            .unwrap()
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>(),
+        expected
+    );
+    assert_eq!(list(&service.db.lock().unwrap()).unwrap().len(), 4);
+    *herdr.offline.lock().unwrap() = false;
+    herdr.spaces.lock().unwrap().clear();
+    assert_eq!(service.sync().unwrap().projects[0].id, "legacy");
+    assert_eq!(visible_list(&service.db.lock().unwrap()).unwrap().len(), 1);
+    drop(service);
+    std::fs::remove_file(path).unwrap();
+}
+
+#[test]
+fn navigation_failed_sync_transaction_keeps_last_order_and_visibility() {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    let herdr = Arc::new(FakeHerdr::default());
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    let expected = service
+        .sync()
+        .unwrap()
+        .projects
+        .iter()
+        .map(|p| p.id.clone())
+        .collect::<Vec<_>>();
+    service.db.lock().unwrap().execute_batch("CREATE TRIGGER fail_navigation BEFORE UPDATE OF workspace_order ON projects BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("b")];
+    assert!(service.sync().is_err());
+    let cached = visible_list(&service.db.lock().unwrap()).unwrap();
+    assert_eq!(
+        cached.iter().map(|p| p.id.clone()).collect::<Vec<_>>(),
+        expected
+    );
+    assert!(cached.iter().all(|p| p.sync_status == "ready"));
+}
+
+#[test]
+fn navigation_online_project_with_unresolved_creation_is_not_mistaken_for_closed() {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    let herdr = Arc::new(FakeHerdr::default());
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a")];
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    let project = service.sync().unwrap().projects.remove(0);
+    service.db.lock().unwrap().execute("INSERT INTO workspace_operations(id,session,name,cwd,project_id,workspace_id,state,created_at) VALUES ('pending','default','a','.',?1,'a','unknown','now')",[&project.id]).unwrap();
+    let snapshot = service.sync().unwrap();
+    assert_eq!(snapshot.projects[0].id, project.id);
+    assert_eq!(snapshot.projects[0].sync_status, "ready");
+    assert_eq!(snapshot.operations[0].state, "unknown");
+    herdr.spaces.lock().unwrap().clear();
+    assert!(service.sync().unwrap().projects.is_empty());
+    assert_eq!(service.operations().unwrap()[0].state, "unknown");
+}
+
+#[test]
+fn navigation_follows_herdr_reordering_and_insertion_without_changing_project_ids() {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    let herdr = Arc::new(FakeHerdr::default());
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    let first = service.sync().unwrap();
+    *herdr.spaces.lock().unwrap() = vec![
+        navigation_workspace("b"),
+        navigation_workspace("c"),
+        navigation_workspace("a"),
+    ];
+    let next = service.sync().unwrap();
+    assert_eq!(
+        next.projects
+            .iter()
+            .map(|p| p.workspace_id.as_deref().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["b", "c", "a"]
+    );
+    assert_eq!(next.projects[0].id, first.projects[1].id);
+    assert_eq!(next.projects[2].id, first.projects[0].id);
+    assert_eq!(
+        service
+            .sync()
+            .unwrap()
+            .projects
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>(),
+        next.projects
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
+fn navigation_hides_closed_workspace_and_restores_only_the_same_identity_with_history() {
+    let db = Connection::open_in_memory().unwrap();
+    crate::db::init(&db).unwrap();
+    let herdr = Arc::new(FakeHerdr::default());
+    *herdr.spaces.lock().unwrap() = vec![navigation_workspace("a"), navigation_workspace("b")];
+    let service = ProjectService::new(Arc::new(Mutex::new(db)), herdr.clone());
+    let first = service.sync().unwrap();
+    let project = &first.projects[0];
+    let task = crate::tasks::create(
+        &service.db.lock().unwrap(),
+        &project.id,
+        "Keep prompt",
+        crate::models::TaskPriority::High,
+        "{\"keep\":true}",
+    )
+    .unwrap();
+    service.db.lock().unwrap().execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,'saved-session','.','now')", [&task.id]).unwrap();
+    herdr.spaces.lock().unwrap().remove(0);
+    assert_eq!(
+        service
+            .sync()
+            .unwrap()
+            .projects
+            .iter()
+            .map(|p| p.id.clone())
+            .collect::<Vec<_>>(),
+        vec![first.projects[1].id.clone()]
+    );
+    assert_eq!(service.get(&project.id).unwrap().sync_status, "missing");
+    herdr.spaces.lock().unwrap().push(Workspace {
+        id: "new-a".into(),
+        name: "a".into(),
+        directory: Some(".".into()),
+    });
+    let new = service
+        .sync()
+        .unwrap()
+        .projects
+        .into_iter()
+        .find(|p| p.name == "a")
+        .unwrap();
+    assert_ne!(new.id, project.id);
+    assert!(
+        crate::tasks::list(&service.db.lock().unwrap(), &new.id)
+            .unwrap()
+            .is_empty()
+    );
+    herdr.spaces.lock().unwrap().push(navigation_workspace("a"));
+    assert!(
+        service
+            .sync()
+            .unwrap()
+            .projects
+            .iter()
+            .any(|p| p.id == project.id)
+    );
+    let tasks = crate::tasks::list(&service.db.lock().unwrap(), &project.id).unwrap();
+    assert_eq!(tasks[0].id, task.id);
+    assert_eq!(tasks[0].prompt_json, "{\"keep\":true}");
+    assert_eq!(
+        service
+            .db
+            .lock()
+            .unwrap()
+            .query_row(
+                "SELECT codex_session_id FROM task_sessions WHERE task_id=?1",
+                [&task.id],
+                |r| r.get::<_, String>(0)
+            )
+            .unwrap(),
+        "saved-session"
+    );
+}
 impl Herdr for FakeHerdr {
     fn session(&self) -> &str {
         self.session_name.as_deref().unwrap_or("default")
@@ -147,8 +377,8 @@ fn sync_does_not_import_an_unresolved_create_or_erase_a_missing_project() {
     let project = service.recover(&op, None).unwrap();
     herdr.spaces.lock().unwrap().clear();
     let snapshot = service.sync().unwrap();
-    assert_eq!(snapshot.projects[0].id, project.id);
-    assert_eq!(snapshot.projects[0].sync_status, "missing");
+    assert!(snapshot.projects.is_empty());
+    assert_eq!(service.get(&project.id).unwrap().sync_status, "missing");
 }
 #[test]
 fn rename_updates_herdr_and_removal_stays_local_until_explicitly_linked() {

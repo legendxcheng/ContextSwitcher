@@ -144,3 +144,14 @@ export function secondTask(): Task {
   return { ...board.storedTask, id: "task-2", name: "任务 B", status: "in_progress",
     binding: { state: "valid", operation: null, target: { ...board.storedTask.binding!.target!, pane_id: "w1:p2", terminal_id: "term2" } } };
 }
+
+export function liveAgent(task: Task, status: string): HerdrAgent {
+  return { ...agent, pane_id: task.binding!.target!.pane_id, status,
+    verified_task_id: task.id, target: { ...task.binding!.target!, status } };
+}
+export function cardDot(name: string) {
+  return screen.getByText(name, { selector: ".task-name" }).closest(".task-card")!.querySelector(".agent-status-dot")!;
+}
+export function cardOrder() {
+  return Array.from(column("in_progress").querySelectorAll(".task-name"), element => element.textContent);
+}

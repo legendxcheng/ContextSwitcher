@@ -7,6 +7,8 @@ mod codex_process;
 #[cfg(test)]
 #[path = "session_isolation_tests.rs"]
 mod session_isolation_tests;
+#[path = "shared_tab.rs"]
+mod shared_tab;
 #[path = "herdr_workspace.rs"]
 mod workspace_metadata;
 use workspace_metadata::workspace_directories;
@@ -170,6 +172,9 @@ impl Herdr for Cli {
     }
     fn available(&self, workspace: &str, cwd: &str) -> Result<Vec<Target>, String> {
         let workspace_id = self.resolve_workspace_id(workspace)?;
+        let Some(tab) = self.kanban_tab(&workspace_id)? else {
+            return Ok(Vec::new());
+        };
         let doc = self.json(&["pane", "list", "--workspace", &workspace_id])?;
         let panes = doc
             .pointer("/result/panes")
@@ -177,8 +182,14 @@ impl Herdr for Cli {
             .ok_or("herdr.invalid_response")?;
         let mut targets = Vec::new();
         for pane in panes {
+            if pane.get("tab_id").and_then(Value::as_str) != Some(tab.as_str()) {
+                continue;
+            }
             let id = field(pane, "pane_id")?;
             if let Ok((target, info)) = self.inspect_pane(&workspace_id, id) {
+                if info.get("tab_id").and_then(Value::as_str) != Some(tab.as_str()) {
+                    continue;
+                }
                 let dir = info
                     .get("foreground_cwd")
                     .and_then(Value::as_str)
@@ -193,6 +204,22 @@ impl Herdr for Cli {
         });
         Ok(targets)
     }
+    fn pane_inventory(
+        &self,
+        workspace: &str,
+    ) -> Result<Option<Vec<crate::workflow::PaneIdentity>>, String> {
+        let panes = self.workspace_panes(workspace)?;
+        panes
+            .iter()
+            .map(|pane| {
+                Ok(crate::workflow::PaneIdentity {
+                    pane_id: field(pane, "pane_id")?.into(),
+                    terminal_id: field(pane, "terminal_id")?.into(),
+                })
+            })
+            .collect::<Result<Vec<_>, String>>()
+            .map(Some)
+    }
     fn create_pane(
         &self,
         workspace: &str,
@@ -206,20 +233,41 @@ impl Herdr for Cli {
         }
         let id = self.resolve_workspace_id(workspace)?;
         check_current()?;
-        let doc = self.json(&[
-            "tab",
-            "create",
-            "--workspace",
-            &id,
-            "--cwd",
-            cwd,
-            "--label",
-            label,
-            "--no-focus",
-        ])?;
-        let pane = doc
-            .pointer("/result/root_pane")
-            .ok_or("herdr.invalid_response")?;
+        let doc;
+        let pane = if let Some(tab) = self.kanban_tab(&id)? {
+            let (anchor, direction) = self.split_anchor(&id, &tab)?;
+            check_current()?;
+            doc = self.json(&[
+                "pane",
+                "split",
+                "--pane",
+                &anchor,
+                "--direction",
+                direction,
+                "--cwd",
+                cwd,
+                "--no-focus",
+            ])?;
+            doc.pointer("/result/pane")
+        } else {
+            check_current()?;
+            doc = self.json(&[
+                "tab",
+                "create",
+                "--workspace",
+                &id,
+                "--cwd",
+                cwd,
+                "--label",
+                "kanban",
+                "--no-focus",
+            ])?;
+            doc.pointer("/result/root_pane")
+        }
+        .ok_or("herdr.invalid_response")?;
+        if field(pane, "workspace_id")? != id {
+            return Err("binding.identity_changed".into());
+        }
         let pane_id = field(pane, "pane_id")?;
         // The pane identity is recorded even when shell initialization has not finished.
         Ok(Target {

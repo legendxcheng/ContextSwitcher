@@ -130,6 +130,8 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
         {onRepair && <button className="btn-ghost" onClick={onRepair}>{tr("binding.repair")}</button>}
       </div>}
     </div>}
-    <div ref={host} className="terminal-host" onKeyDown={(e) => e.stopPropagation()} />
+    <div className="terminal-body">
+      <div ref={host} className="terminal-host" onKeyDown={(e) => e.stopPropagation()} />
+    </div>
   </aside>;
 }

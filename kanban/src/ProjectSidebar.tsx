@@ -29,7 +29,7 @@ export function ProjectSidebar({ projects, selectedId, onSelect, onChanged, oper
   return (
     <aside className="sidebar" aria-label="项目导航">
       <div className="sidebar-brand">
-        <span className="brand-mark"><Icon name="board" size={22} /></span>
+        <span className="brand-mark"><img src="/app-icon.svg" width={32} height={32} alt="" /></span>
         <span>herdr<span className="brand-subtitle"> / kanban</span></span>
       </div>
       <div className="sidebar-intro">把想法变成下一步。</div>

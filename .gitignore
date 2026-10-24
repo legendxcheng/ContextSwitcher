@@ -21,11 +21,37 @@ wheels/
 *.egg
 MANIFEST
 
+# Python tooling and test output
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.hypothesis/
+.tox/
+.nox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+coverage/
+
 # Virtual Environment
 venv/
 .venv/
 env/
 ENV/
+
+# Local environment settings (keep shareable templates)
+.env
+.env.*
+!.env.example
+!.env.*.example
+!.env.template
+!.env.*.template
+
+# Node.js / Vite / TypeScript
+node_modules/
+.vite/
+*.tsbuildinfo
 
 # IDE
 .vscode/
@@ -38,6 +64,7 @@ ENV/
 # OS
 .DS_Store
 Thumbs.db
+Desktop.ini
 
 # Application specific
 config.json
@@ -45,7 +72,11 @@ tasks.json
 *.log
 *.backup
 data/
+logs/
 nul
+
+# Local experiments, isolated builds, and acceptance artifacts
+/.scratch/
 
 # Root-level exploratory test scripts
 /test_*.py
@@ -54,7 +85,5 @@ nul
 # Distribution
 *.exe
 *.msi
-dist/
-build/
 build_new/
 release/

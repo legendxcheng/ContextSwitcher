@@ -143,6 +143,25 @@ pub fn init(conn: &Connection) -> Result<()> {
     );
     INSERT OR IGNORE INTO schema_migrations(version) VALUES (7);",
     )?;
+    if !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=8)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch(
+            "ALTER TABLE projects ADD COLUMN workspace_order INTEGER;
+            INSERT INTO schema_migrations(version) VALUES (8);",
+        )?;
+        tx.commit()?;
+    }
+    conn.execute_batch(
+        "CREATE TABLE IF NOT EXISTS pane_allocations (
+        operation_id TEXT PRIMARY KEY, session TEXT NOT NULL, workspace TEXT NOT NULL,
+        before_json TEXT NOT NULL, target_json TEXT, resolved INTEGER NOT NULL DEFAULT 0
+    );
+    CREATE INDEX IF NOT EXISTS pane_allocation_workspace ON pane_allocations(session,workspace,resolved);",
+    )?;
     Ok(())
 }
 

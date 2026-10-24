@@ -19,6 +19,12 @@ pub struct SendError {
     pub message: String,
     pub uncertain: bool,
 }
+
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq, Eq)]
+pub struct PaneIdentity {
+    pub pane_id: String,
+    pub terminal_id: String,
+}
 pub(crate) fn ensure_project_target(
     db: &Connection,
     task: &str,
@@ -55,6 +61,10 @@ pub trait Herdr: Send + Sync {
     }
     fn available(&self, _workspace: &str, _cwd: &str) -> Result<Vec<Target>, String> {
         Err("flow.unsupported".into())
+    }
+    /// Live inventory for durable creation reconciliation. None keeps legacy adapters compatible.
+    fn pane_inventory(&self, _workspace: &str) -> Result<Option<Vec<PaneIdentity>>, String> {
+        Ok(None)
     }
     fn create_pane(
         &self,

@@ -5,9 +5,11 @@ import { notify } from "./Toast";
 import { Icon } from "./Icon";
 import { errorText, tr } from "./i18n";
 import { flowPending, flowUnresolved, preparationLabel, taskColumn } from "./taskFlow";
+import { AgentStatusDot, type AgentStatus } from "./agentStatus";
 
 interface TaskCardProps {
   task: Task;
+  agentStatus: AgentStatus;
   onChanged: () => void;
   onRemoved: () => void;
   onEditTask: (id: string | null) => void;
@@ -21,7 +23,7 @@ interface TaskCardProps {
   onFlowRecover?: () => void;
 }
 
-export function TaskCard({ task, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, onComplete, onStart, onFlowRecover }: TaskCardProps) {
+export function TaskCard({ task, agentStatus, onChanged, onRemoved, onEditTask, onDispatchTask, onRecover, onSelect, selected, busy, onComplete, onStart, onFlowRecover }: TaskCardProps) {
   const archivingRef = useRef(false);
   const deletingRef = useRef(false);
   const [deleting, setDeleting] = useState(false);
@@ -76,6 +78,7 @@ export function TaskCard({ task, onChanged, onRemoved, onEditTask, onDispatchTas
         <div className="task-header" role={onSelect ? "button" : undefined} tabIndex={onSelect ? 0 : undefined}
           aria-label={onSelect ? `${tr("terminal.view")}${task.name}` : undefined} aria-pressed={onSelect ? !!selected : undefined}
           onKeyDown={(event) => { if (onSelect && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onSelect(); } }}>
+          <AgentStatusDot status={agentStatus} />
           <span className="task-name" title={task.name}>{task.name}</span>
         </div>
         <fieldset disabled={controlsDisabled} className="task-tools" {...controls}>

@@ -68,18 +68,10 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         app.herdr.targets(workspace).unwrap().is_empty(),
         "use an empty workspace"
     );
-    // Herdr removes a workspace when its last pane closes. Keep a shell with
-    // another cwd so it is never selected as a task pane during this test.
-    let keepalive_cwd = std::env::temp_dir();
-    assert_ne!(std::path::Path::new(&cwd), keepalive_cwd);
-    app.herdr
-        .create_pane(
-            workspace,
-            keepalive_cwd.to_str().unwrap(),
-            "kanban-acceptance-keepalive",
-            &|| Ok(()),
-        )
-        .unwrap();
+    // The original shell tab is a keepalive, even with the same cwd. Automatic allocation
+    // must ignore it and create just one shared kanban tab for concurrent starts.
+    let cli = Cli::from_env();
+    assert!(cli.kanban_tab(workspace).unwrap().is_none());
     let ids = {
         let db = app.db.lock().unwrap();
         crate::db::init(&db).unwrap();
@@ -93,14 +85,33 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
     };
     let mut targets = Vec::new();
     let mut sessions = Vec::new();
+    std::thread::scope(|scope| {
+        let starts: Vec<_> = ids
+            .iter()
+            .map(|id| {
+                scope.spawn(|| {
+                    app.start_task(
+                        id,
+                        "Reply only READY. Do not run commands or edit files.",
+                        &operation(),
+                    )
+                    .unwrap();
+                })
+            })
+            .collect();
+        for start in starts {
+            start.join().unwrap();
+        }
+    });
+    let shared_tab = cli.kanban_tab(workspace).unwrap().unwrap();
     for id in &ids {
-        app.start_task(
-            id,
-            "Reply only READY. Do not run commands or edit files.",
-            &operation(),
-        )
-        .unwrap();
         let target = app.binding(id).unwrap().target.unwrap();
+        let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
+        assert_eq!(
+            pane.pointer("/result/pane/tab_id")
+                .and_then(serde_json::Value::as_str),
+            Some(shared_tab.as_str())
+        );
         let deadline = Instant::now() + Duration::from_secs(10);
         let session = loop {
             if let Some(session) = app.herdr.session_id(&target).unwrap() {
@@ -133,8 +144,10 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         assert!(!app.herdr.pane_exists(&targets[index]).unwrap());
         if index == 0 {
             assert!(app.herdr.pane_exists(&targets[1]).unwrap());
+            assert_eq!(cli.kanban_tab(workspace).unwrap(), Some(shared_tab.clone()));
         }
     }
+    assert!(cli.kanban_tab(workspace).unwrap().is_none());
     drop(app);
     let conn = Connection::open(&path).unwrap();
     crate::db::init(&conn).unwrap();
@@ -147,6 +160,13 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
         app.start_task(id, "MUST_NOT_BE_SENT_ON_RESUME", &operation())
             .unwrap();
         let target = app.binding(id).unwrap().target.unwrap();
+        let tab = cli.kanban_tab(workspace).unwrap().unwrap();
+        let pane = cli.json(&["pane", "get", &target.pane_id]).unwrap();
+        assert_eq!(
+            pane.pointer("/result/pane/tab_id")
+                .and_then(serde_json::Value::as_str),
+            Some(tab.as_str())
+        );
         assert_eq!(
             app.herdr.session_id(&target).unwrap(),
             Some(sessions[index].clone())

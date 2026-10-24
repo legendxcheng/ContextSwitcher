@@ -119,7 +119,7 @@ export function MentionPopover({ rootPath }: { rootPath: string }) {
             ref: f.abs_path,
           }));
         } else {
-          const skills = await api.searchSkills(query);
+          const skills = await api.searchSkills(rootPath, query);
           suggestions = skills.map((s: SkillEntry) => ({
             kind: "skill" as const,
             label: s.name,

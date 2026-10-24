@@ -1,4 +1,12 @@
 {
+  "flow.kanban_tab_ambiguous": "此工作区有多个 kanban Tab，请保留一个同名 Tab 后重试。",
+  "agent_status.working": "运行中",
+  "agent_status.blocked": "等待用户反馈／审批",
+  "agent_status.done": "本轮已结束，待查看",
+  "agent_status.idle": "空闲，等待新指令",
+  "agent_status.unknown": "状态未知／连接不可用",
+  "agent_status.not_started": "未启动",
+  "agent_status.closed": "会话已关闭",
   "binding.occupied": "已被其他任务占用",
   "binding.refresh": "刷新 Agent",
   "binding.prepare": "请在 Herdr 中准备独立 Agent 后刷新。",

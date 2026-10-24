@@ -38,7 +38,8 @@ export const archiveTask = (id: string) => invoke<void>("archive_task", { id });
 // Discovery
 export const searchFiles = (rootPath: string, query: string) =>
   invoke<FileEntry[]>("search_files", { rootPath, query });
-export const searchSkills = (query: string) => invoke<SkillEntry[]>("search_skills", { query });
+export const searchSkills = (rootPath: string, query: string) =>
+  invoke<SkillEntry[]>("search_skills", { rootPath, query });
 export const readFileContent = (absPath: string) =>
   invoke<string>("read_file_content", { absPath });
 export const readSkillContent = (skillMdPath: string) =>

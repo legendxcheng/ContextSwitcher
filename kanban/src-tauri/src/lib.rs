@@ -1,3 +1,4 @@
+mod agent_status;
 mod commands;
 mod db;
 mod herdr;

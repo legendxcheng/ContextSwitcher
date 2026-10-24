@@ -36,7 +36,7 @@ fn err(e: impl std::fmt::Display) -> String {
     e.to_string()
 }
 pub fn list(conn: &Connection) -> Result<Vec<Project>, String> {
-    let mut stmt = conn.prepare("SELECT id,name,root_path,herdr_workspace,cs_task_id,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory FROM projects ORDER BY created_at,id").map_err(err)?;
+    let mut stmt = conn.prepare("SELECT id,name,root_path,herdr_workspace,cs_task_id,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory FROM projects ORDER BY workspace_order IS NULL,workspace_order,created_at,id").map_err(err)?;
     let rows = stmt
         .query_map([], |r| {
             Ok(Project {
@@ -56,6 +56,13 @@ pub fn list(conn: &Connection) -> Result<Vec<Project>, String> {
         .map_err(err)?;
     rows.collect::<Result<Vec<_>, _>>().map_err(err)
 }
+/// Navigation hides confirmed missing identities; recovery still uses the full list.
+pub fn visible_list(conn: &Connection) -> Result<Vec<Project>, String> {
+    Ok(list(conn)?
+        .into_iter()
+        .filter(|p| p.workspace_id.is_none() || p.sync_status != "missing")
+        .collect())
+}
 impl ProjectService {
     pub fn new(db: Arc<Mutex<Connection>>, herdr: Arc<dyn Herdr>) -> Self {
         Self {
@@ -72,7 +79,9 @@ impl ProjectService {
         let existing = list(&tx)?;
         let pending = operations(&tx, self.herdr.session())?;
         tx.execute("UPDATE projects SET sync_status='missing' WHERE herdr_session=?1 AND workspace_id IS NOT NULL",[self.herdr.session()]).map_err(err)?;
-        for ws in &workspaces {
+        for (order, ws) in workspaces.iter().enumerate() {
+            // Presence is independent of whether a pending creation can be imported.
+            tx.execute("UPDATE projects SET sync_status='ready',workspace_order=?3 WHERE herdr_session=?1 AND workspace_id=?2", params![self.herdr.session(),ws.id,order as i64]).map_err(err)?;
             if pending.iter().any(|op| {
                 op.workspace_id.as_deref() == Some(&ws.id)
                     || ws.name == format!("kanban-create-{}", op.id)
@@ -127,16 +136,16 @@ impl ProjectService {
                     && p.workspace_id.as_deref() == Some(&ws.id)
             });
             let (root, source) = directory_state(current.as_ref(), ws.directory.as_deref());
-            tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory)
-                VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8)
+            tx.execute("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at,herdr_session,workspace_id,sync_status,directory_source,herdr_directory,workspace_order)
+                VALUES (?1,?2,?3,?2,?4,?5,?6,'ready',?7,?8,?9)
                 ON CONFLICT DO UPDATE SET name=excluded.name,herdr_workspace=excluded.herdr_workspace,
-                sync_status='ready',root_path=excluded.root_path,directory_source=excluded.directory_source,herdr_directory=excluded.herdr_directory",
-                params![uuid::Uuid::new_v4().to_string(),ws.name,root,chrono::Utc::now().to_rfc3339(),self.herdr.session(),ws.id,source,ws.directory]).map_err(err)?;
+                sync_status='ready',root_path=excluded.root_path,directory_source=excluded.directory_source,herdr_directory=excluded.herdr_directory,workspace_order=excluded.workspace_order",
+                params![uuid::Uuid::new_v4().to_string(),ws.name,root,chrono::Utc::now().to_rfc3339(),self.herdr.session(),ws.id,source,ws.directory,order as i64]).map_err(err)?;
         }
         tx.commit().map_err(err)?;
         Ok(Snapshot {
             session: self.herdr.session().into(),
-            projects: list(&db)?,
+            projects: visible_list(&db)?,
             workspaces,
             operations: operations(&db, self.herdr.session())?,
         })

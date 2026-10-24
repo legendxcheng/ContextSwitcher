@@ -12,6 +12,8 @@ import { BindingDialog } from "./BindingDialog";
 import { tr, errorText } from "./i18n";
 import { flowUnresolved, taskColumn } from "./taskFlow";
 import { useTaskFlowUpdates } from "./useTaskFlowUpdates";
+import { useAgentStatus } from "./useAgentStatus";
+import { taskAgentStatus } from "./agentStatus";
 
 interface KanbanBoardProps {
   project: Project;
@@ -33,6 +35,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const draggingIdRef = useRef<string | null>(null);
   const dragFromControl = useRef(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
+  const { agents, refreshAgents } = useAgentStatus(project);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -51,6 +54,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const loadSequence = useRef(0);
   const taskRequest = useRef<Promise<Task[]> | null>(null);
   const mounted = useRef(true);
+  const agentStatuses = new Map(tasks.map(task => [task.id, taskAgentStatus(task, agents, busyTasks.has(task.id))]));
   useEffect(() => {
     if (!workspaceRef.current) return;
     const observer = new ResizeObserver(() => {
@@ -73,6 +77,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
 
   async function load(refreshDiscovery = true) {
     if (!mounted.current) return;
+    if (refreshDiscovery) refreshAgents();
     const sequence = ++loadSequence.current;
     setLoading(true);
     const request = !refreshDiscovery && taskRequest.current ? taskRequest.current : api.listTasks(project.id);
@@ -210,6 +215,8 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
           <div className="kanban-columns">
           {COLUMNS.map(({ status, label, emptyIcon, emptyText, hint }) => {
             const col = tasks.filter((t) => taskColumn(t) === status);
+            if (status === "in_progress") col.sort((a, b) =>
+              Number(agentStatuses.get(b.id) === "blocked") - Number(agentStatuses.get(a.id) === "blocked"));
             return (
               <div
                 key={status}
@@ -254,6 +261,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                       >
                         <TaskCard
                           task={task}
+                          agentStatus={agentStatuses.get(task.id)!}
                           busy={busyTasks.has(task.id)}
                           onComplete={() => moveTask(task, "done")}
                           onStart={() => moveTask(task, "in_progress")}

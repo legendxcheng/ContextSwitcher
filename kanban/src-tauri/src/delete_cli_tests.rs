@@ -36,6 +36,7 @@ if (($phase -eq 'create' -and $command -eq 'workspace list' -and $n -eq 2) -or (
 $agent = @{workspace_id='w1';pane_id='w1:p1';terminal_id='term';agent='codex';agent_status='idle';interactive_ready=$true;agent_session=@{agent='codex';kind='id';value='12345678-1234-4234-8234-123456789abc'}}
 $result = switch ($command) {
     'workspace list' { @{workspaces=@(@{workspace_id='w1';label='Test'})} }
+    'tab list' { @{tabs=@()} }
     'pane list' { if ($phase -eq 'create') { @{panes=@()} } else { @{panes=@($agent)} } }
     'agent get' { @{agent=$agent} }
     'pane process-info' { @{process_info=@{shell_pid=1;foreground_process_group_id=2}} }

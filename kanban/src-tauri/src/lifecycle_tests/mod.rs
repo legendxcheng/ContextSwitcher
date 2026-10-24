@@ -18,6 +18,7 @@ struct State {
     mismatch: bool,
     send_error: bool,
     create_error: bool,
+    lost_create_response: bool,
     prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
     observe: Option<Arc<dyn Fn(&str) + Send + Sync>>,
 }
@@ -63,6 +64,20 @@ impl Herdr for Fake {
         self.observe("available");
         Ok(candidates)
     }
+    fn pane_inventory(
+        &self,
+        w: &str,
+    ) -> Result<Option<Vec<crate::workflow::PaneIdentity>>, String> {
+        Ok(Some(
+            self.targets(w)?
+                .into_iter()
+                .map(|t| crate::workflow::PaneIdentity {
+                    pane_id: t.pane_id,
+                    terminal_id: t.terminal_id,
+                })
+                .collect(),
+        ))
+    }
     fn create_pane(
         &self,
         _: &str,
@@ -78,8 +93,12 @@ impl Herdr for Fake {
         s.created += 1;
         let t = target(&format!("created-{}", s.created));
         s.panes.insert(t.pane_id.clone(), (t.clone(), None));
+        let lost = s.lost_create_response;
         drop(s);
         self.observe("created");
+        if lost {
+            return Err("herdr.timeout".into());
+        }
         Ok(t)
     }
     fn prepare_codex(

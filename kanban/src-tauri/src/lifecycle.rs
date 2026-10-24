@@ -1,6 +1,8 @@
 //! Durable task lifecycle. External calls never hold the SQLite mutex.
 use crate::workflow::{Target, Workflow, binding, pane_owner};
 use rusqlite::{Connection, OptionalExtension, params};
+#[path = "pane_allocation.rs"]
+mod pane_allocation;
 
 #[cfg(all(test, windows))]
 #[path = "delete_cli_tests.rs"]
@@ -202,6 +204,12 @@ impl Workflow {
             params![op, json],
         )
         .map_err(err)?;
+        // The binding now owns this known pane; only unbound/unknown creation needs quarantine.
+        tx.execute(
+            "UPDATE pane_allocations SET resolved=1 WHERE operation_id=?1",
+            [op],
+        )
+        .map_err(err)?;
         tx.commit().map_err(err)
     }
     fn save_session(
@@ -300,8 +308,15 @@ impl Workflow {
             if saved.is_none() && prompt.trim().is_empty() {
                 return Err("dispatch.empty".into());
             }
+            let allocation_lock =
+                pane_allocation::workspace_lock(self.herdr.session(), &workspace)?;
+            let allocation_guard = allocation_lock.lock().map_err(err)?;
+            self.check_flow(task, op)?;
             let mut selected = None;
             for candidate in self.herdr.available(&workspace, &cwd)? {
+                if self.allocation_quarantines(&candidate)? {
+                    continue;
+                }
                 match self.reserve_target(task, op, &candidate) {
                     Ok(()) => {
                         selected = Some(candidate);
@@ -314,8 +329,9 @@ impl Workflow {
             let target = match selected {
                 Some(target) => target,
                 None => {
-                    // Persisted operation UUID is also the tab label for crash reconciliation.
+                    // Persist the inventory before creation; shared tabs cannot identify a task.
                     self.check_flow(task, op)?;
+                    self.record_allocation_intent(task, op, &workspace)?;
                     touched = true;
                     let target = self.herdr.create_pane(
                         &workspace,
@@ -323,10 +339,12 @@ impl Workflow {
                         &format!("kanban-{op}"),
                         &|| self.check_flow(task, op),
                     )?;
+                    self.record_allocation_target(task, op, &target)?;
                     self.reserve_target(task, op, &target)?;
                     target
                 }
             };
+            drop(allocation_guard);
             touched = true;
             progress("starting_agent")?;
             self.check_flow(task, op)?;
@@ -493,9 +511,13 @@ impl Workflow {
         }
         let target = match b.target {
             Some(t) => Some(t),
-            None => self
-                .herdr
-                .find_created(&workspace, &format!("kanban-{op}"))?,
+            None => match self.allocation_absent(&workspace, op)? {
+                Some(false) => return Err("flow.close_before_reset".into()),
+                Some(true) => None,
+                None => self
+                    .herdr
+                    .find_created(&workspace, &format!("kanban-{op}"))?,
+            },
         };
         if let Some(target) = target {
             if self.herdr.pane_exists(&target)? {
@@ -505,6 +527,11 @@ impl Workflow {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         ensure_operation(&tx, task, op)?;
+        tx.execute(
+            "UPDATE pane_allocations SET resolved=1 WHERE operation_id=?1",
+            [op],
+        )
+        .map_err(err)?;
         tx.execute("DELETE FROM task_bindings WHERE task_id=?1", [task])
             .map_err(err)?;
         // A session created before an unsent first prompt must not make the next start skip it.

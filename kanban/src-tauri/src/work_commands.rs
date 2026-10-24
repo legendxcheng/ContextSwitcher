@@ -48,45 +48,15 @@ pub async fn recover_lifecycle(
         .map_err(|e| e.to_string())?
 }
 
-#[derive(serde::Serialize)]
-pub struct AgentChoice {
-    name: String,
-    status: String,
-    pane_id: String,
-    title: String,
-    occupied_by: Option<String>,
-}
-
 #[tauri::command]
 pub async fn herdr_list_agents(
     app: State<'_, Arc<Workflow>>,
     project_id: String,
-) -> Result<Vec<AgentChoice>, String> {
+) -> Result<Vec<crate::agent_status::AgentChoice>, String> {
     let app = app.inner().clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let workspace = crate::projects::project_identity(
-            &*app.db.lock().map_err(|e| e.to_string())?,
-            &project_id,
-            app.herdr.session(),
-        )?;
-        let targets = app.herdr.targets(&workspace)?;
-        let conn = app.db.lock().map_err(|e| e.to_string())?;
-        targets
-            .into_iter()
-            .map(|target| {
-                let owner = crate::workflow::pane_owner(&conn, &target)?;
-                Ok(AgentChoice {
-                    name: target.agent,
-                    status: target.status,
-                    pane_id: target.pane_id,
-                    title: target.title,
-                    occupied_by: owner,
-                })
-            })
-            .collect()
-    })
-    .await
-    .map_err(|e| e.to_string())?
+    tauri::async_runtime::spawn_blocking(move || app.list_agents(&project_id))
+        .await
+        .map_err(|e| e.to_string())?
 }
 
 #[tauri::command]
