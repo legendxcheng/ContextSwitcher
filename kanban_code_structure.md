@@ -1,6 +1,6 @@
 # Kanban 代码结构与关键流程分析
 
-更新日期：2026-10-24（新增异常任务删除；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；修复 Skill 候选布局与键盘滚动；保留 Herdr workspace 同步、统一任务表单、卡片、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-24（新增首批重构：测试按场景拆分与 Herdr 适配职责提取；新增异常任务删除；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；修复 Skill 候选布局与键盘滚动；保留 Herdr workspace 同步、统一任务表单、卡片、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 ## 1. 项目定位与架构边界
 
@@ -59,6 +59,7 @@ kanban/
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步，请求合并
 │  ├─ WorkspaceRecovery.tsx        未决 workspace 创建核实与显式认领
+│  ├─ board-tests/                 按导航、表单、删除归档、状态、选择、派发与后台启动分组的组件回归；fixtures 隔离每个用例
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
 │  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
@@ -90,9 +91,14 @@ kanban/
 │     ├─ tasks.rs                  任务存储、优先级排序、归档事务及活跃任务守卫
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
 │     ├─ lifecycle.rs              自动分配、会话记录、完成清理与启动核实
+│     ├─ lifecycle_tests/          共用 fixture 与分配、后台启动、完成清理、恢复场景
 │     ├─ start.rs                  持久化受理、后台引用展开及启动通知
 │     ├─ workflow.rs               任务绑定、派发操作及恢复事务
-│     ├─ herdr.rs                  有界 CLI 调用、目标身份核验
+│     ├─ workflow_tests/           独占、派发恢复、任务变更互斥与显式 live 场景
+│     ├─ herdr.rs                  Cli/Herdr 对外适配、目标身份核验及 workspace/pane 操作
+│     ├─ herdr_cli.rs              无 shell 的有界进程执行、输出及响应错误分类
+│     ├─ herdr_workspace.rs        session 文件定位与只读 workspace 目录元数据
+│     ├─ herdr_codex.rs            Codex 新建、精确恢复、身份读取与 Windows 单次提交
 │     └─ terminal.rs               Herdr JSONL 控制流、输入与安全释放
 ├─ public/、src/assets/、src-tauri/icons/  静态资源和图标
 └─ dist/、node_modules/、src-tauri/target/ 构建产物与依赖目录
@@ -544,3 +550,11 @@ npm run tauri build
 手动派发弹窗在等待中可通过原取消按钮或遮罩收起，以便使用卡片删除；已开始的派发不承诺撤销，卸载后的回调只刷新持久化结果，不选择旧任务或关闭其他弹窗。
 
 本次验收与边界见[异常任务删除验收记录](docs/verification/2026-10-24-kanban-delete-unresolved-task.md)。不包含最初启动时序报错或核实按钮的修复。
+
+### 11.2 首批结构重构（2026-10-24，GitHub #22–#29）
+
+生命周期与派发的内嵌测试分别移至 `lifecycle_tests/` 和 `workflow_tests/`。根测试模块仅保留共用 fixture 与准备函数，子模块按业务场景组织；真实环境用例保留显式 ignored 条件。看板组件测试移至 `board-tests/`，通过同一 fixtures 模块在每个用例重置任务、Agent、调用记录、订阅与终端尺寸，卸载后清理定时器、spy 和全局替身；不依赖其他测试文件的可变状态。
+
+Herdr 对外仍使用 `Cli` 与 `Herdr`。内部 `herdr_cli` 承担进程执行及响应语义，`herdr_workspace` 承担只读目录元数据，`herdr_codex` 承担 Codex 准备、新建/精确恢复、会话身份与 Windows 提交兼容。原业务事务、身份和任务有效性检查及未知结果隔离均保留，不新增 IPC、配置或数据库迁移。
+
+共享工作区的验证结果、提交快照与真实桌面验收分别记录在[首批重构验收记录](docs/verification/2026-10-24-kanban-first-refactor.md)。本次变更只整理内部职责，不将其他未提交功能纳入重构提交。
