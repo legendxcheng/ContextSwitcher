@@ -8,7 +8,16 @@ export interface Project {
   herdr_workspace: string;
   cs_task_id: string | null;
   created_at: string;
+  herdr_session: string | null;
+  workspace_id: string | null;
+  sync_status: string;
+  directory_source: string;
+  herdr_directory: string | null;
 }
+
+export interface HerdrWorkspace { id: string; name: string; directory: string | null }
+export interface WorkspaceOperation { id: string; session: string; name: string; cwd: string; workspace_id: string | null; project_id: string; state: string; error: string }
+export interface ProjectSnapshot { session: string; projects: Project[]; workspaces: HerdrWorkspace[]; operations: WorkspaceOperation[] }
 
 export interface Task {
   priority: TaskPriority;
@@ -72,12 +81,7 @@ export interface DispatchRecord {
 }
 
 // Slim view of a ContextSwitcher task for the project-link picker
-export interface CsTask {
-  id: string;
-  name: string;
-  status: string;
-  herdr_workspace: string | null;
-}
+
 
 // Tiptap mention node stored inside prompt_json
 export interface MentionAttrs {

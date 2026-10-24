@@ -626,3 +626,18 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
   .board-meta { display: none; }
   .board-toolbar kbd { display: none; }
 }
+
+/* Herdr workspace synchronization and recovery. */
+.workspace-dialog { max-height: 85vh; overflow-y: auto; }
+.workspace-mode, .workspace-path { display: flex; gap: 8px; }
+.workspace-mode { margin-bottom: 16px; }
+.workspace-path input { flex: 1; min-width: 0; }
+.workspace-directory-option { display: flex; align-items: center; gap: 8px; overflow-wrap: anywhere; }
+.workspace-directory-option input { width: auto; }
+.workspace-sync { padding: 8px 12px; }
+.workspace-sync button { width: 100%; }
+.workspace-sync .error { font-size: 12px; max-height: 100px; overflow: auto; overflow-wrap: anywhere; }
+.workspace-pending { padding: 8px 12px; max-height: 30vh; overflow: auto; border-top: 1px solid var(--border); }
+.workspace-recovery { padding: 8px 0; overflow-wrap: anywhere; }
+.workspace-recovery select { width: 100%; }
+.workspace-recovery p { margin: 6px 0; font-size: 12px; }

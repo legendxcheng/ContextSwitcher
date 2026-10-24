@@ -24,10 +24,31 @@ vi.stubGlobal("ResizeObserver", class { observe() {} disconnect() {} });
 const project: Project = {
   id: "project-1", name: "测试项目", root_path: "E:/fixture",
   herdr_workspace: "fixture", cs_task_id: null, created_at: "2026-10-23",
+  herdr_session: "default", workspace_id: "w1", sync_status: "ready", directory_source: "herdr", herdr_directory: "E:/fixture",
 };
 const agent: HerdrAgent = {
   pane_id: "pane-1", name: "codex", title: "测试 Agent", status: "idle",
 };
+
+it("synchronizes Herdr workspaces on focus while retaining local tasks on failure", async () => {
+  let offline = false;
+  const original = vi.mocked(invoke).getMockImplementation()!;
+  vi.mocked(invoke).mockImplementation(async (command, args) => {
+    if (command === "list_projects") return [project];
+    if (command === "sync_projects") {
+      if (offline) throw new Error("herdr.unavailable");
+      return { projects: [{ ...project, name: "Synced name" }], workspaces: [], operations: [] };
+    }
+    if (command === "workspace_operations") return [];
+    return original(command, args);
+  });
+  render(<App />);
+  await screen.findByRole("button", { name: /^Synced name/ });
+  offline = true;
+  fireEvent(window, new Event("focus"));
+  await screen.findByText(/同步失败/);
+  expect(screen.getByText("修复拖放派发")).toBeTruthy();
+});
 let storedTask: Task;
 let availableAgents: HerdrAgent[];
 let extraTasks: Task[];
@@ -385,7 +406,7 @@ describe("默认终端与任务选择", () => {
     });
     render(<App />); await screen.findByText("已连接");
     const first = vi.mocked(invoke).mock.calls.find(([name]) => name === "terminal_open")![1] as { connectionId: string };
-    fireEvent.click(screen.getByRole("button", { name: /^第二项目\s*fixture$/ }));
+    fireEvent.click(screen.getByRole("button", { name: /^第二项目\s*E:\/fixture$/ }));
     await waitFor(() => expect(invoke).toHaveBeenCalledWith("terminal_open", expect.objectContaining({ taskId: taskB.id })));
     expect(invoke).toHaveBeenCalledWith("terminal_close", { connectionId: first.connectionId });
     expect(screen.getByRole("button", { name: "查看终端：任务 B" }).getAttribute("aria-pressed")).toBe("true");

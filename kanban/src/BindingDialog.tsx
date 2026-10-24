@@ -13,11 +13,11 @@ export function BindingDialog({ task, project, onClose, onSaved }: { task: Task;
   useEffect(() => {
     let active = true;
     setLoading(true); setError("");
-    api.herdrListAgents(project.herdr_workspace).then((items) => { if (active) setAgents(items); })
+    api.herdrListAgents(project.id).then((items) => { if (active) setAgents(items); })
       .catch((e) => { if (active) setError(errorText(e)); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [project.herdr_workspace, refresh]);
+  }, [project.id, project.workspace_id, refresh]);
   async function save() {
     setBusy(true); setError("");
     try { await api.repairBinding(task.id, selected); onSaved(); }

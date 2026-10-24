@@ -1,7 +1,7 @@
-use crate::models::{CsTask, Project, Task, TaskPriority};
+use crate::models::{Project, Task, TaskPriority};
 use chrono::Utc;
 use rfd;
-use rusqlite::{params, Connection};
+use rusqlite::{Connection, params};
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tauri::State;
@@ -14,102 +14,7 @@ pub struct DbState(pub Arc<Mutex<Connection>>);
 
 #[tauri::command]
 pub fn list_projects(state: State<DbState>) -> Result<Vec<Project>, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let mut stmt = conn
-        .prepare("SELECT id, name, root_path, herdr_workspace, cs_task_id, created_at FROM projects ORDER BY created_at")
-        .map_err(|e| e.to_string())?;
-    let rows = stmt
-        .query_map([], |row| {
-            Ok(Project {
-                id: row.get(0)?,
-                name: row.get(1)?,
-                root_path: row.get(2)?,
-                herdr_workspace: row.get(3)?,
-                cs_task_id: row.get(4)?,
-                created_at: row.get(5)?,
-            })
-        })
-        .map_err(|e| e.to_string())?;
-    rows.collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())
-}
-
-#[tauri::command]
-pub fn create_project(
-    state: State<DbState>,
-    name: String,
-    root_path: String,
-    herdr_workspace: String,
-    cs_task_id: Option<String>,
-) -> Result<Project, String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let p = Project {
-        id: Uuid::new_v4().to_string(),
-        name,
-        root_path,
-        herdr_workspace,
-        cs_task_id,
-        created_at: Utc::now().to_rfc3339(),
-    };
-    conn.execute(
-        "INSERT INTO projects (id, name, root_path, herdr_workspace, cs_task_id, created_at) VALUES (?1,?2,?3,?4,?5,?6)",
-        params![p.id, p.name, p.root_path, p.herdr_workspace, p.cs_task_id, p.created_at],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(p)
-}
-
-#[tauri::command]
-pub fn update_project(
-    state: State<DbState>,
-    id: String,
-    name: String,
-    root_path: String,
-    herdr_workspace: String,
-    cs_task_id: Option<String>,
-) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if active {
-        return Err("flow.verify_required".into());
-    }
-    conn.execute(
-        "UPDATE projects SET name=?1, root_path=?2, herdr_workspace=?3, cs_task_id=?4 WHERE id=?5",
-        params![name, root_path, herdr_workspace, cs_task_id, id],
-    )
-    .map_err(|e| e.to_string())?;
-    Ok(())
-}
-
-#[tauri::command]
-pub fn delete_project(
-    state: State<DbState>,
-    terminals: State<Arc<crate::terminal::TerminalManager>>,
-    id: String,
-) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    let active: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if active {
-        return Err("flow.verify_required".into());
-    }
-    let pending: bool = conn.query_row("SELECT EXISTS(SELECT 1 FROM dispatch_operations o JOIN tasks t ON t.id=o.task_id WHERE t.project_id=?1 AND o.state IN ('pending','unknown'))",[&id],|r|r.get(0)).map_err(|e|e.to_string())?;
-    if pending {
-        return Err("dispatch.verify_required".into());
-    }
-    let ids = conn
-        .prepare("SELECT id FROM tasks WHERE project_id=?1")
-        .map_err(|e| e.to_string())?
-        .query_map([&id], |r| r.get::<_, String>(0))
-        .map_err(|e| e.to_string())?
-        .collect::<Result<Vec<_>, _>>()
-        .map_err(|e| e.to_string())?;
-    conn.execute("DELETE FROM projects WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
-    drop(conn);
-    for task in ids {
-        terminals.close_task(&task);
-    }
-    Ok(())
+    crate::projects::list(&*state.0.lock().map_err(|e| e.to_string())?)
 }
 
 // ── Tasks ─────────────────────────────────────────────────────────────────────
@@ -129,7 +34,13 @@ pub fn create_task(
     prompt_json: Option<String>,
 ) -> Result<Task, String> {
     let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::tasks::create(&conn, &project_id, &name, priority, prompt_json.as_deref().unwrap_or("{}"))
+    crate::tasks::create(
+        &conn,
+        &project_id,
+        &name,
+        priority,
+        prompt_json.as_deref().unwrap_or("{}"),
+    )
 }
 
 #[tauri::command]
@@ -355,55 +266,4 @@ pub fn pick_folder() -> Result<Option<String>, String> {
         .set_title("选择本地目录")
         .pick_folder();
     Ok(folder.map(|p| p.to_string_lossy().replace('\\', "/")))
-}
-
-/// Read ContextSwitcher tasks.json from %APPDATA%\ContextSwitcher\tasks.json
-/// and return a slim list for the project-link picker.
-#[tauri::command]
-pub fn read_cs_tasks() -> Result<Vec<CsTask>, String> {
-    let appdata = std::env::var("APPDATA").map_err(|_| "APPDATA not set".to_string())?;
-    let path = PathBuf::from(appdata)
-        .join("ContextSwitcher")
-        .join("tasks.json");
-
-    if !path.exists() {
-        return Ok(vec![]);
-    }
-
-    let raw = std::fs::read_to_string(&path).map_err(|e| format!("read tasks.json: {e}"))?;
-    let doc: serde_json::Value =
-        serde_json::from_str(&raw).map_err(|e| format!("parse tasks.json: {e}"))?;
-
-    let tasks = doc
-        .get("tasks")
-        .and_then(|v| v.as_array())
-        .ok_or_else(|| "tasks.json missing 'tasks' array".to_string())?;
-
-    let result: Vec<CsTask> = tasks
-        .iter()
-        .filter_map(|t| {
-            let id = t.get("id")?.as_str()?.to_string();
-            let name = t.get("name")?.as_str()?.to_string();
-            let status = t
-                .get("status")
-                .and_then(|v| v.as_str())
-                .unwrap_or("todo")
-                .to_string();
-            // herdr workspace is nested under herdr_binding.label in v1.4+ format
-            let herdr_workspace = t
-                .get("herdr_binding")
-                .and_then(|b| b.get("label"))
-                .and_then(|v| v.as_str())
-                .filter(|s| !s.is_empty())
-                .map(|s| s.to_string());
-            Some(CsTask {
-                id,
-                name,
-                status,
-                herdr_workspace,
-            })
-        })
-        .collect();
-
-    Ok(result)
 }

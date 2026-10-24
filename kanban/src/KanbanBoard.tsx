@@ -75,12 +75,12 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     if (!project.herdr_workspace) return;
     refreshAgents();
     return () => { ++agentSequence.current; };
-  }, [project.herdr_workspace]);
+  }, [project.id, project.workspace_id]);
 
   async function refreshAgents() {
     const sequence = ++agentSequence.current;
     try {
-      const items = await api.herdrListAgents(project.herdr_workspace);
+      const items = await api.herdrListAgents(project.id);
       if (sequence === agentSequence.current) setAgents(items);
     } catch { if (sequence === agentSequence.current) setAgents([]); }
   }

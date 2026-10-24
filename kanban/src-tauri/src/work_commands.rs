@@ -54,10 +54,15 @@ pub struct AgentChoice {
 #[tauri::command]
 pub async fn herdr_list_agents(
     app: State<'_, Arc<Workflow>>,
-    workspace: String,
+    project_id: String,
 ) -> Result<Vec<AgentChoice>, String> {
     let app = app.inner().clone();
     tauri::async_runtime::spawn_blocking(move || {
+        let workspace = crate::projects::project_identity(
+            &*app.db.lock().map_err(|e| e.to_string())?,
+            &project_id,
+            app.herdr.session(),
+        )?;
         let targets = app.herdr.targets(&workspace)?;
         let conn = app.db.lock().map_err(|e| e.to_string())?;
         targets

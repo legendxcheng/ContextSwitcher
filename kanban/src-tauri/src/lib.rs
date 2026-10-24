@@ -3,6 +3,8 @@ mod db;
 mod herdr;
 mod lifecycle;
 mod models;
+mod project_commands;
+mod projects;
 mod tasks;
 mod terminal;
 mod work_commands;
@@ -29,11 +31,16 @@ pub fn run() {
         db: conn.clone(),
         herdr: Arc::new(herdr::Cli::from_env()),
     });
+    let projects = Arc::new(projects::ProjectService::new(
+        conn.clone(),
+        workflow.herdr.clone(),
+    ));
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_shell::init())
         .manage(DbState(conn))
         .manage(workflow)
+        .manage(projects)
         .manage(Arc::new(terminal::TerminalManager::default()))
         .on_window_event(|window, event| {
             if matches!(event, tauri::WindowEvent::Destroyed) {
@@ -43,9 +50,13 @@ pub fn run() {
         })
         .invoke_handler(tauri::generate_handler![
             commands::list_projects,
-            commands::create_project,
-            commands::update_project,
-            commands::delete_project,
+            project_commands::create_project,
+            project_commands::update_project,
+            project_commands::delete_project,
+            project_commands::sync_projects,
+            project_commands::workspace_operations,
+            project_commands::recover_workspace,
+            project_commands::link_workspace,
             commands::list_tasks,
             commands::create_task,
             commands::update_task,
@@ -69,7 +80,6 @@ pub fn run() {
             work_commands::terminal_resize,
             work_commands::terminal_ack,
             commands::pick_folder,
-            commands::read_cs_tasks,
         ])
         .run(tauri::generate_context!())
         .expect("error while running tauri application");

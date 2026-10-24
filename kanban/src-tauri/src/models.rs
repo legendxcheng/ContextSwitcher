@@ -9,15 +9,11 @@ pub struct Project {
     /// Linked ContextSwitcher task id (optional)
     pub cs_task_id: Option<String>,
     pub created_at: String,
-}
-
-/// Slim view of a ContextSwitcher task for the project-link picker
-#[derive(Debug, Serialize, Deserialize, Clone)]
-pub struct CsTask {
-    pub id: String,
-    pub name: String,
-    pub status: String,
-    pub herdr_workspace: Option<String>,
+    pub herdr_session: Option<String>,
+    pub workspace_id: Option<String>,
+    pub sync_status: String,
+    pub directory_source: String,
+    pub herdr_directory: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize, Clone, PartialEq)]

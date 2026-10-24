@@ -1,24 +1,29 @@
 import { useState } from "react";
-import type { Project } from "./types";
+import type { Project, WorkspaceOperation } from "./types";
 import * as api from "./api";
 import { ProjectFormDialog } from "./ProjectFormDialog";
 import { Icon } from "./Icon";
+import { WorkspaceRecovery } from "./WorkspaceRecovery";
+import { tr, errorText } from "./i18n";
+import { notify } from "./Toast";
 
 interface ProjectSidebarProps {
   projects: Project[];
   selectedId: string | null;
   onSelect: (id: string) => void;
   onChanged: () => void;
+  operations?: WorkspaceOperation[];
+  syncing?: boolean;
+  syncError?: string;
 }
 
-export function ProjectSidebar({ projects, selectedId, onSelect, onChanged }: ProjectSidebarProps) {
+export function ProjectSidebar({ projects, selectedId, onSelect, onChanged, operations = [], syncing = false, syncError = "" }: ProjectSidebarProps) {
   const [showNew, setShowNew] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
 
   async function handleDelete(id: string) {
-    if (!confirm("删除项目及其所有任务？")) return;
-    await api.deleteProject(id);
-    onChanged();
+    if (!confirm(tr("workspace.remove_confirm"))) return;
+    try { await api.deleteProject(id); onChanged(); } catch (e) { notify(errorText(e),"error"); }
   }
 
   return (
@@ -42,7 +47,7 @@ export function ProjectSidebar({ projects, selectedId, onSelect, onChanged }: Pr
               <Icon name="folder" />
               <span className="project-info">
                 <span className="project-name">{p.name}</span>
-                <span className="project-ws">{p.herdr_workspace}</span>
+                <span className="project-ws" title={p.root_path}>{p.sync_status !== "ready" ? tr(`workspace.${p.sync_status}`) : p.root_path || tr("workspace.directory_missing")}</span>
               </span>
             </button>
             <div className="project-actions">
@@ -52,11 +57,16 @@ export function ProjectSidebar({ projects, selectedId, onSelect, onChanged }: Pr
           </div>
         ))}
       </div>
+      <div className="workspace-sync"><button className="btn-secondary" disabled={syncing} onClick={onChanged}>{tr(syncing ? "workspace.syncing" : "workspace.refresh")}</button>
+        {syncError && <p className="error" role="alert">{syncError}</p>}
+      </div>
+      {operations.length > 0 && <div className="workspace-pending"><strong>{tr("workspace.pending_title")}</strong>{operations.map((op) => <WorkspaceRecovery key={op.id} operation={op} onChanged={onChanged} />)}</div>}
       <button className="sidebar-create btn-secondary" onClick={() => setShowNew(true)}><Icon name="plus" />新建项目</button>
       <div className="sidebar-footer"><Icon name="terminal" /><div><strong>你的本地工作空间</strong><span>组织任务 · 协作开发</span></div></div>
 
       {showNew && (
         <ProjectFormDialog
+          key="new-workspace"
           onClose={() => setShowNew(false)}
           onSaved={() => { setShowNew(false); onChanged(); }}
         />
@@ -64,6 +74,7 @@ export function ProjectSidebar({ projects, selectedId, onSelect, onChanged }: Pr
       {editTarget && (
         <ProjectFormDialog
           existing={editTarget}
+          key={editTarget.id}
           onClose={() => setEditTarget(null)}
           onSaved={() => { setEditTarget(null); onChanged(); }}
         />

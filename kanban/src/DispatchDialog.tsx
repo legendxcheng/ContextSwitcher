@@ -29,7 +29,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
     let active = true;
     setLoading(true);
     setError("");
-    api.herdrListAgents(project.herdr_workspace)
+    api.herdrListAgents(project.id)
       .then((a) => {
         if (!active) return;
         setAgents(a);
@@ -40,7 +40,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
       })
       .catch((e) => { if (active) { setError(errorText(e)); setLoading(false); } });
     return () => { active = false; };
-  }, [project.herdr_workspace, refresh]);
+  }, [project.id, project.workspace_id, refresh]);
 
   function buildPreview() {
     // Preview file placeholders and native skill invocations.

@@ -1,6 +1,6 @@
 # Kanban 代码结构与关键流程分析
 
-更新日期：2026-10-24（统一新建/编辑任务居中表单与提示词创建；保留卡片、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，同时核对主项目的 ContextSwitcher 任务序列化格式。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-24（Herdr workspace 同步；保留统一任务表单、卡片、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 ## 1. 项目定位与架构边界
 
@@ -12,19 +12,20 @@ Kanban 是同一仓库中的独立桌面应用，使用 React + TypeScript 构�
 
 | 概念 | 当前职责 | 关系的实际约束 |
 | --- | --- | --- |
-| ContextSwitcher Task | Python 主应用管理的窗口上下文及任务 | Kanban 只读取其摘要，不写回、不切换窗口 |
-| Kanban Project | 看板容器，保存本地根目录、Herdr workspace 名称和可选 CS task ID | 一个项目有多张卡片；CS 关联可为空，且没有唯一约束 |
+| ContextSwitcher Task | Python 主应用管理的窗口上下文及任务 | Kanban 不再读取或同步 |
+| Kanban Project | 看板容器，关联 Herdr session + workspace ID，缓存名称与目录 | 同一 session 中 workspace 关联唯一；旧歧义项目保留待关联 |
 | Kanban Task | 项目中的单张卡片，含状态、提示词及最近一次派发信息 | 不等同于主应用 Task，也不映射主应用的 `todo_items` |
 
-`CLAUDE.md` 中“一个 CS Task = 一个 Workspace = 一个 Project”是设计意图。代码没有强制一对一关系；workspace 也是文本标签，不是稳定 workspace ID。
+Project 的稳定身份来自 Herdr；旧 `cs_task_id` 仅作为历史字段保留。名称同步不修改任务、绑定或会话身份。
 
 ```mermaid
 flowchart LR
     UI[React 组件与局部状态] --> API[api.ts：Tauri IPC]
-    API --> CMD[commands.rs + work_commands.rs]
+    API --> CMD[commands.rs + project_commands.rs + work_commands.rs]
     CMD --> DB[(SQLite kanban.db)]
     CMD --> FILE[项目文件与 ~/.claude 技能]
-    CMD --> CS[ContextSwitcher/tasks.json：只读]
+    CMD --> PS[projects.rs：同步与创建恢复]
+    PS --> CLI
     CMD --> CLI[Herdr CLI 子进程]
     CLI --> AGENT[已有 Agent pane]
     CMD --> WF[workflow.rs：独占绑定与派发]
@@ -53,7 +54,9 @@ kanban/
 │  ├─ types.ts                     前端数据结构
 │  ├─ api.ts                       Tauri IPC 适配层
 │  ├─ ProjectSidebar.tsx           项目列表和管理入口
-│  ├─ ProjectFormDialog.tsx        项目表单、目录选择、CS 任务关联
+│  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
+│  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步，请求合并
+│  ├─ WorkspaceRecovery.tsx        未决 workspace 创建核实与显式认领
 │  ├─ KanbanBoard.tsx              卡片加载、三列、拖拽及弹层协调
 │  ├─ TaskCard.tsx                 紧凑卡片、优先级及编辑/完成/删除/归档入口
 │  ├─ PrioritySelect.tsx           创建与编辑共用的三档优先级选择
@@ -98,7 +101,7 @@ kanban/
 3. 连接包装为 `Arc<Mutex<Connection>>`，CRUD 与 Workflow 共享。外部 Herdr 请求不持有数据库锁。
 4. 注册插件、业务命令、Workflow 和 TerminalManager，再启动 Tauri 窗口；销毁窗口时释放本应用终端连接。
 5. [main.tsx](kanban/src/main.tsx) 挂载 `App`；`App` 加载项目，自动选择列表中的第一个有效项目。
-6. `KanbanBoard` 按项目 ID 加载卡片，按 workspace 名称查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
+6. `KanbanBoard` 按项目 ID 加载卡片，由后端按 Project ID 解析稳定 workspace ID 查询 Agent；卡片成功加载后自动选择第一张开发中任务，已有有效选择则保留。加载期间及没有项目时也保留右侧空终端。
 
 数据库初始化发生在窗口启动前。创建目录、连接和建表失败使用 `expect` 终止，没有恢复界面。数据库命令通过一把 Mutex 串行访问同一连接。
 
@@ -146,7 +149,7 @@ flowchart TD
 | --- | --- | --- |
 | [App.tsx](kanban/src/App.tsx) | `projects`、`selectedId`；从列表派生当前项目 | `listProjects`；把刷新函数下传侧栏 |
 | [ProjectSidebar.tsx](kanban/src/ProjectSidebar.tsx) | 新建弹窗开关、编辑目标 | 删除前确认；完成 CRUD 后通知 App 重载 |
-| [ProjectFormDialog.tsx](kanban/src/ProjectFormDialog.tsx) | 名称、根目录、workspace、CS task ID、保存状态和错误 | 创建/更新项目、选择目录、读取 CS 任务 |
+| [ProjectFormDialog.tsx](kanban/src/ProjectFormDialog.tsx) | 名称、目录、workspace ID、操作 ID、保存状态和错误 | 创建/关联/改名、回退目录、未知结果核实 |
 | [KanbanBoard.tsx](kanban/src/KanbanBoard.tsx) | 卡片列表、加载、创建弹窗、拖拽状态、Agent 列表、编辑 ID、待派发对象 | 加载/创建/变更状态；协调编辑与派发弹层 |
 | [TaskCard.tsx](kanban/src/TaskCard.tsx) | 展示名称、优先级、异常与紧凑图标操作 | 编辑/派发回调；完成交给看板流转；删除/归档调用 API |
 | [TaskFormDialog.tsx](kanban/src/TaskFormDialog.tsx) | 标题、提示词、优先级草稿及保存/错误状态 | 新建一次创建完整任务；编辑显式保存；失败保留草稿并恢复焦点 |
@@ -181,12 +184,15 @@ flowchart TD
 | --- | --- |
 | `id` | Rust 生成 UUID v4 字符串，主键 |
 | `name` | 项目展示名称 |
-| `root_path` | 文件搜索及自动启动/恢复的工作目录；手动派发不切换已有 Agent 目录 |
-| `herdr_workspace` | Agent 列表筛选文本，同时进入派发目标记录 |
-| `cs_task_id` | 可空的 CS 任务 ID，仅作为关联信息 |
+| `root_path` | 文件搜索及新任务启动目录；已有会话/已绑定任务保留原工作目录 |
+| `herdr_workspace` | 兼容的展示名称；不再用于查找派发目标 |
+| `herdr_session`、`workspace_id` | 稳定关联身份；部分唯一索引保证一个 workspace 一个 Project |
+| `sync_status` | ready / unlinked / missing |
+| `directory_source`、`herdr_directory` | herdr / missing / cached / fallback / conflict，以及最近权威目录 |
+| `cs_task_id` | 仅保留历史值，不触发运行时读取 |
 | `created_at` | UTC RFC3339 字符串；项目列表按其排序 |
 
-表单要求名称、根目录、workspace 非空，但 Rust CRUD 没有重复实施该校验，也没有验证目录存在、workspace 存在或 CS ID 有效。
+创建在后端校验名称与有效目录，正式关联只接受在线存在的 workspace ID；显式重新关联拒绝改写活跃绑定或未决操作。
 
 ### 4.2 Task
 
@@ -210,7 +216,10 @@ flowchart TD
 | `dispatch_operations` | 操作 ID 主键；pending/unknown/sent/not_sent；保存目标、实际 prompt、时间与人工核实依据；部分唯一索引限制每任务一个未决操作 |
 | `task_sessions` | 按 task_id 保存 Codex 会话 UUID、目录和更新时间；与活跃 pane 独立 |
 | `lifecycle_operations` | 启动/完成操作 UUID、pending/unknown/succeeded/failed、目标、错误和核实依据；每任务最多一条未决记录 |
-| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 5；4 加优先级，5 加归档时间），初始化可重复执行 |
+| `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
+| `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
+| `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
+| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 6；4 加优先级，5 加归档时间，6 加稳定项目身份），初始化可重复执行 |
 
 Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tasks 表。`flow` 包含保存的会话 ID、最近生命周期操作及错误。无活跃绑定但有会话记录时返回 dormant；没有会话记录的旧开发中任务返回 repair，旧共享目标不会自动认领。完成后成功关闭才解除 pane 绑定；缺会话 ID、身份变化或关闭失败时保留目标并提供重试关闭。移回未开发保留绑定；删除解除绑定，保留操作审计记录。`DispatchRecord` 仍是命令返回值，最近一次快照也继续保存在 Task 上。
 
@@ -218,20 +227,24 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 
 默认数据库为 `%APPDATA%\herdr-kanban\kanban.db`；隔离验收可设置 `KANBAN_DATA_DIR`。它与 Python 主应用的 tasks.json 独立。启动持有同目录数据库锁，避免第二实例把活跃派发误判为中断；进程退出自动释放锁。
 
-显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经手动派发或自动启动/恢复工作流。pending/unknown 操作阻止相关任务的冲突操作与删除，并阻止项目删除及生命周期未决时的项目修改，以保留核实证据。关闭中断允许在重新核验原目标后重试。
+显式启用 `foreign_keys=ON` 和 3 秒 busy timeout。增量建表保留原项目、任务、prompt、快照及目标文本；原有 cs_task_id 迁移仍兼容。status 仍无 SQL CHECK，但状态命令只接受 todo/done，拒绝直接改为 in_progress；进入开发中必须经手动派发或自动启动/恢复工作流。pending/unknown 操作阻止相关任务的冲突操作与删除，并阻止项目删除和身份重新关联；已知身份一致的自动迁移与名称同步可继续，以保留核实证据。关闭中断允许在重新核验原目标后重试。
 
 ## 5. IPC 命令契约
 
-[api.ts](kanban/src/api.ts) 是唯一的前端 invoke 入口；[lib.rs](kanban/src-tauri/src/lib.rs) 注册命令；[commands.rs](kanban/src-tauri/src/commands.rs) 实现 CRUD，[work_commands.rs](kanban/src-tauri/src/work_commands.rs) 适配派发和终端服务。
+[api.ts](kanban/src/api.ts) 是唯一的前端 invoke 入口；[lib.rs](kanban/src-tauri/src/lib.rs) 注册命令；[commands.rs](kanban/src-tauri/src/commands.rs) 实现本地 CRUD，[project_commands.rs](kanban/src-tauri/src/project_commands.rs) 适配 ProjectService，[work_commands.rs](kanban/src-tauri/src/work_commands.rs) 适配派发和终端服务。
 
 参数在 TypeScript invoke 对象中使用 camelCase，例如 `rootPath`、`projectId`；Rust 函数参数和返回结构字段使用 snake_case。Rust 的 `Result<T, String>` 对应前端成功值或 Promise rejection，新增业务错误使用稳定 key 前缀，由 React i18n 映射；CLI 细节作为附加诊断。
 
 | 命令 | 主要输入 | 返回/副作用 |
 | --- | --- | --- |
 | `list_projects` | 无 | `Project[]`，按创建时间排序 |
-| `create_project` | name、rootPath、herdrWorkspace、csTaskId | 插入并返回 Project |
-| `update_project` | id + 项目字段 | 更新项目，返回空 |
-| `delete_project` | id | 删除项目；卡片清理由外键级联负责 |
+| `sync_projects` | 无 | 当前 session 的 Project、在线 workspace、未决操作快照 |
+| `workspace_operations` | 无 | 当前 session 未决创建记录 |
+| `create_project` | name、rootPath、operationId | 先记录意图，再创建 Herdr workspace、核实并关联 Project |
+| `recover_workspace` | operationId、可选 workspaceId | 只核实/认领实际创建结果，不重新创建 |
+| `link_workspace` | 可选 projectId、workspaceId、可选 fallbackPath | 显式添加或修复关联 |
+| `update_project` | id、name、可选 fallbackPath | 稳定 ID 改名，读回实际结果并返回 Project |
+| `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
 | `create_task` | projectId、name、priority、可选 promptJson | 单条 INSERT 保存标题、提示词、优先级，创建 todo 卡片并返回 Task；省略正文兼容 `{}` |
 | `update_task` | id、name、promptJson、priority | 更新名称、正文、优先级及 updated_at；拒绝归档任务 |
@@ -245,7 +258,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `search_skills` | query | 最多 30 个 SkillEntry |
 | `read_file_content` | absPath | UTF-8 文件全文 |
 | `read_skill_content` | skillMdPath | UTF-8 SKILL.md 全文 |
-| `herdr_list_agents` | workspace | 精确 workspace 标签匹配，返回带 occupied_by 的 Agent 列表 |
+| `herdr_list_agents` | projectId | 后端解析 session + workspace ID，返回带 occupied_by 的 Agent 列表 |
 | `dispatch_to_herdr` | taskId、agentName（pane ID）、promptText、operationId | 后端从项目解析 workspace，预占后发送并落库 |
 | `resolve_dispatch` | taskId、operationId、sent、evidence | 人工核实未知结果，不重发 |
 | `repair_binding` | taskId、paneId | 显式验证并替换独占绑定，不重发 |
@@ -255,23 +268,22 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `terminal_ack` | connectionId、bytes | 渲染消费确认，释放输出配额 |
 | `terminal_close` | connectionId | 只释放指定查看连接 |
 | `pick_folder` | 无 | 原生目录选择结果；取消返回 null |
-| `read_cs_tasks` | 无 | CS 任务摘要 CsTask[] |
 
 `dispatch_to_herdr` 的 `agentName` 实际传入 `pane_id`，不是 `HerdrAgent.name`。`name` 是 Agent 类型，`title` 用于展示，`pane_id` 才是发送目标。
 
 ## 6. 关键业务调用链
 
-### 6.1 创建项目及关联 ContextSwitcher
+### 6.1 Herdr workspace 同步、创建与恢复
 
-`ProjectSidebar → ProjectFormDialog → readCsTasks/pickFolder → createProject/updateProject → Rust SQL → App.loadProjects()`。
+`App → useProjectSync → sync_projects → ProjectService → Herdr CLI + SQLite`。先展示本地缓存，启动、焦点、手动及前台 15 秒刷新；请求合并，迟到结果不覆盖后续刷新。当前选择保持 Project ID，表单草稿独立。在线失败保留项目和任务，不等同于空列表；确认消失仅标记失联。
 
-表单每次挂载读取一次 CS 任务。选择一个 CS 任务时，仅在项目名称/workspace 当前为空的情况下自动填充，不会自动填根目录，也不会建立后续同步。CS 任务被删除或重命名后，现存 Project 不会自动修正。
+已有 workspace 按稳定 ID 自动导入。旧 Project 优先使用一致的历史绑定/未决目标身份，其次唯一的名称与等价目录；冲突保留待关联，不合并任务。Windows 目录比较统一大小写、斜杠及尾分隔符。
 
-`read_cs_tasks()` 读取固定 JSON 文件中的 `tasks` 数组，提取 `id`、`name`、`status`、`herdr_binding.label`；缺少 ID/名称的条目被跳过，文件不存在返回空列表。前端把读取/解析失败也转换为空列表，因此界面无法区分“没有任务”和“读取失败”。
+默认目录按在线 ID 从 Herdr version 3 会话数据 `identity_cwd` 只读补充，不读取 pane cwd。默认 session 使用 `%APPDATA%/herdr/session.json`；非默认 session 或自定义 Herdr 配置必须用 `KANBAN_HERDR_SESSION_FILE` 指定对应文件，否则降级。读取上限 8 MiB；格式、目录无效时保留缓存或请求本地回退。回退与后来读取的权威目录不同会显示冲突，由用户明确选择；不会写回 Herdr 会话文件。
 
-主项目 [Task.to_dict()](core/task_manager.py) 确实输出 `herdr_binding: { workspace_id, label }`，[DataStorage.save_tasks()](utils/data_storage.py) 输出包含版本、时间和 `tasks` 的对象。Kanban 只取 label，不利用主程序已保存的稳定 workspace ID；也不执行主项目的旧格式迁移逻辑。
+`ProjectFormDialog → create_project → 持久化 UUID → workspace create --label kanban-create-<UUID> --cwd <目录> --no-focus → 保存返回 ID → rename → 读回 → 提交 Project`。明确发送前失败可复用原操作重试；响应未知或落库失败只核实已知 ID/标记，不再次创建。歧义由用户显式选择，并保护其他未决操作保留的 ID/标记；已被自动导入的实际结果可就地认领，保留其任务。`WorkspaceRecovery` 在重启后继续核实。
 
-CS 的完成状态为 `completed`，Kanban 为 `done`。二者分别使用各自的模型，目前没有转换或状态联动。
+Kanban 改名调用 Herdr 并读回确认；外部改名按 ID 同步。外部调用不持 SQLite Mutex，短事务提交结果。本地删除保留排除记录，不关闭外部资源。旧 ContextSwitcher 读取 IPC、类型和表单入口均已移除。
 
 ### 6.2 创建、编辑和移动卡片
 
@@ -353,9 +365,9 @@ sequenceDiagram
     end
 ```
 
-**Agent 发现。** 精确匹配唯一 workspace label，读取 agent list 与 pane process-info；缺失、歧义或无法核实身份的目标不可选。目标身份包含 session、workspace ID、pane ID、terminal ID、Agent 类型以及 shell PID/前台进程组。标题只展示，不参与身份判定。默认使用本机 default session。
+**Agent 发现。** 按 Project 保存的 session + workspace ID 验证在线身份，读取 agent list 与 pane process-info；缺失、歧义或无法核实身份的目标不可选。目标身份包含 session、workspace ID、pane ID、terminal ID、Agent 类型以及 shell PID/前台进程组。标题只展示，不参与身份判定。默认使用本机 default session。
 
-派发和修复对话框可以刷新列表，其他任务占用目标显示为禁用；后端数据库约束仍是最终保障。再派发复用已有有效目标。顶部 Agent 栏在项目 workspace 变化时刷新，其拖放仍需进入对话框确认，不直接发送。
+派发和修复对话框可以刷新列表，其他任务占用目标显示为禁用；后端数据库约束仍是最终保障。再派发复用已有有效目标。顶部 Agent 栏在项目 ID/关联 workspace ID 变化时刷新，其拖放仍需进入对话框确认，不直接发送。
 
 **预览。** `buildPreview()` 调用本地 `extractTextWithMentions()`，展示普通文本、`[@文件: ...]` 占位符与原样的 `$技能名`，不读取引用正文。技能的预览与实际发送一致；文件在实际派发时展开。
 
@@ -385,7 +397,7 @@ sequenceDiagram
 
 `KanbanBoard → api → work_commands → lifecycle.rs` 复用 Workflow、SQLite 和 Herdr trait，外部请求不持有数据库 Mutex。
 
-- 首次启动先写 pending 生命周期意图。按项目 workspace 解析唯一 ID，仅选择目录一致、未被任何卡片占用的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。候选在数据库事务中唯一预占，冲突继续下一个。没有候选时新建同 workspace 独立 tab，目录为项目根目录、标签为 `kanban-<操作 UUID>`，不抢 Herdr 焦点。
+- 首次启动先写 pending 生命周期意图。使用项目稳定 workspace ID，仅选择目录一致、未被任何卡片占用的空闲 shell 或交互就绪的 idle/done Codex；跳过 working/blocked/unknown Agent。候选在数据库事务中唯一预占，冲突继续下一个。没有候选时新建同 workspace 独立 tab，目录为项目根目录、标签为 `kanban-<操作 UUID>`，不抢 Herdr 焦点。
 - 复用已有 Codex 时先核验身份，通过 `/quit` 退出旧会话，再等待 shell 就绪。首次启动新会话；恢复启动显式 `resume <UUID>` 并指定项目目录。保留原有效任务绑定时直接连接，不创建或发送。
 - 会话仅接受当前目标身份下 `agent_session.agent=codex`、`kind=id` 且 value 是合法 UUID 的上报。读取缺失时不猜最近会话或从屏幕提取 ID。首次启动允许暂缺 ID；完成前必须重新从当前目标读取并落库，拿不到时保留 pane。
 - 完成先提交 done，再保存会话、复核目标进程身份、关闭任务 pane，并用成功的 pane 列表确认其已消失后释放绑定。警告与卡片状态分开返回；重试关闭不会对已不存在的 pane 再发关闭请求。已发送关闭但结果不确定时保留 unknown，先核实关闭再允许重新开发，避免迟到关闭影响继续工作。不会关闭 workspace 或其他任务的 pane。
@@ -426,7 +438,7 @@ sequenceDiagram
 | 接入更多技能目录 | commands.rs 的 search_skills | 发现路径配置、去重、排序、缓存、完整 frontmatter 解析 |
 | 改 Herdr 协议或派发可靠性 | herdr.rs、workflow.rs、work_commands.rs、terminal.rs | 稳定目标 ID、超时、结果解析、重复发送、落库失败 |
 | 增加 Agent 自动完成同步 | 独立结果接收/查询模块，加任务状态服务 | 任务与执行实例映射、重复/乱序通知、用户手动状态冲突；当前没有此链路 |
-| 加深 CS 集成 | read_cs_tasks、ProjectFormDialog、主项目序列化 | 稳定 workspace ID、completed/done 差异、单向/双向数据所有权 |
+| workspace 同步 | projects.rs、project_commands.rs、useProjectSync | Herdr 目录格式兼容、未决创建恢复、session 隔离 |
 | 修改布局与主题 | App.css、对应组件 | WebView2 原生拖放、最小窗口尺寸、遮罩层级和输入焦点 |
 
 现已按实际业务边界拆出 Workflow、Herdr CLI 与 TerminalManager。后续若修改这些规则，优先通过命令所调用的服务入口验证任务状态、发送次数、SQLite 结果和底层进程生命周期，不为每个 CLI 子命令建立独立业务模型。
@@ -472,7 +484,7 @@ npm run tauri build
 3. `api.ts → lib.rs → commands.rs/work_commands.rs → workflow.rs/lifecycle.rs/herdr.rs/terminal.rs`：对应每个动作的 IPC、SQL 与外部副作用。
 4. `TaskFormDialog → PromptEditor → MentionNode/MentionPopover`：理解新建/编辑共用草稿及 prompt_json 如何产生。
 5. `DispatchDialog → dispatchUtils → dispatch_to_herdr`：理解“草稿、预览、实际发送、快照”之间的差异。
-6. `ProjectFormDialog → read_cs_tasks → 主项目 Task.to_dict()`：核对跨项目数据契约。
+6. `ProjectFormDialog → project_commands → ProjectService → Herdr`：核对稳定身份、默认目录及创建恢复。
 
 ## 11. 规格与实施对应
 
@@ -484,3 +496,5 @@ npm run tauri build
 2026-10-24 卡片增量来源：[GitHub #12](https://github.com/legendxcheng/ContextSwitcher/issues/12)。用户随后明确只保留顶部新建入口。实现及验证边界见[卡片验收记录](docs/verification/2026-10-24-kanban-cards.md)。
 
 2026-10-24 任务表单统一增量：新建与编辑共用居中弹窗及三个字段；创建接口一次保存提示词，旧调用省略正文仍兼容。验收基于 1420b27 加本次变更的隔离快照，49 项前端测试、37 项 Rust 测试、类型检查与生产构建通过，2 项已有 Herdr live 测试未执行，保留既有大 chunk 提示。真实 Windows Tauri/WebView2 + 隔离 SQLite 验证了创建、文件引用、编辑、刷新读回、旧 IPC 兼容，以及 900×600/1280×800 居中布局；浏览器模拟 IPC 另覆盖 1920×1080、长正文引用、失败草稿、键盘和英文界面。未重新打包安装，未执行任务派发；详见[任务表单验收记录](docs/verification/2026-10-24-kanban-task-form.md)。
+
+2026-10-24 workspace 同步增量：[GitHub #13](https://github.com/legendxcheng/ContextSwitcher/issues/13) 已实现。前端 54 项、Rust 54 项常规测试通过；真实 Herdr 项目服务验收另行通过。桌面启动/自动导入已观察，UI 点击输入验收受电脑控制工具限制，不能宣称 UI 创建已验收。详细证据、命令及未覆盖场景见 [workspace 验收记录](docs/verification/2026-10-24-kanban-workspace-sync.md)。

@@ -1,27 +1,17 @@
 import { useState, useEffect } from "react";
-import type { Project } from "./types";
 import { ProjectSidebar } from "./ProjectSidebar";
 import { KanbanBoard } from "./KanbanBoard";
 import { ToastContainer } from "./Toast";
 import { Icon } from "./Icon";
 import { TerminalPanel } from "./TerminalPanel";
-import * as api from "./api";
+import { useProjectSync } from "./useProjectSync";
 import "./App.css";
 
 export default function App() {
-  const [projects, setProjects] = useState<Project[]>([]);
+  const { projects, operations, syncing, error, refresh } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
-  async function loadProjects() {
-    const ps = await api.listProjects();
-    setProjects(ps);
-    // auto-select first project if none selected
-    if (ps.length > 0 && (selectedId === null || !ps.find((p) => p.id === selectedId))) {
-      setSelectedId(ps[0].id);
-    }
-  }
-
-  useEffect(() => { loadProjects(); }, []);
+  useEffect(() => { setSelectedId((id) => projects.some((p) => p.id === id) ? id : projects[0]?.id ?? null); }, [projects]);
 
   const selectedProject = projects.find((p) => p.id === selectedId) ?? null;
 
@@ -32,7 +22,10 @@ export default function App() {
         projects={projects}
         selectedId={selectedId}
         onSelect={setSelectedId}
-        onChanged={loadProjects}
+        onChanged={refresh}
+        operations={operations}
+        syncing={syncing}
+        syncError={error}
       />
       <main className="board-area">
         {selectedProject ? (

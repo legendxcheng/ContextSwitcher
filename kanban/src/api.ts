@@ -1,16 +1,16 @@
 import { invoke, Channel } from "@tauri-apps/api/core";
 import type {
-  Project, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord, CsTask,
+  Project, ProjectSnapshot, WorkspaceOperation, Task, TaskPriority, FileEntry, SkillEntry, HerdrAgent, DispatchRecord,
 } from "./types";
 
 // Projects
 export const listProjects = () => invoke<Project[]>("list_projects");
-export const createProject = (
-  name: string, root_path: string, herdr_workspace: string, cs_task_id?: string | null,
-) => invoke<Project>("create_project", { name, rootPath: root_path, herdrWorkspace: herdr_workspace, csTaskId: cs_task_id ?? null });
-export const updateProject = (
-  id: string, name: string, root_path: string, herdr_workspace: string, cs_task_id?: string | null,
-) => invoke<void>("update_project", { id, name, rootPath: root_path, herdrWorkspace: herdr_workspace, csTaskId: cs_task_id ?? null });
+export const syncProjects = () => invoke<ProjectSnapshot>("sync_projects");
+export const workspaceOperations = () => invoke<WorkspaceOperation[]>("workspace_operations");
+export const createProject = (name: string, rootPath: string, operationId: string) => invoke<Project>("create_project", { name, rootPath, operationId });
+export const updateProject = (id: string, name: string, fallbackPath: string | null) => invoke<Project>("update_project", { id, name, fallbackPath });
+export const linkWorkspace = (projectId: string | null, workspaceId: string, fallbackPath: string | null) => invoke<Project>("link_workspace", { projectId, workspaceId, fallbackPath });
+export const recoverWorkspace = (operationId: string, workspaceId: string | null = null) => invoke<Project>("recover_workspace", { operationId, workspaceId });
 export const deleteProject = (id: string) => invoke<void>("delete_project", { id });
 
 // Tasks
@@ -41,8 +41,8 @@ export const readSkillContent = (skillMdPath: string) =>
   invoke<string>("read_skill_content", { skillMdPath });
 
 // Herdr
-export const herdrListAgents = (workspace: string) =>
-  invoke<HerdrAgent[]>("herdr_list_agents", { workspace });
+export const herdrListAgents = (projectId: string) =>
+  invoke<HerdrAgent[]>("herdr_list_agents", { projectId });
 export const dispatchToHerdr = (
   taskId: string, agentName: string, workspace: string, promptText: string, operationId: string,
 ) => invoke<DispatchRecord>("dispatch_to_herdr", {
@@ -61,9 +61,6 @@ export const closeTerminal = (connectionId: string) => invoke<void>("terminal_cl
 export const inputTerminal = (connectionId: string, data: string) => invoke<void>("terminal_input", { connectionId, data });
 export const resizeTerminal = (connectionId: string, cols: number, rows: number) => invoke<void>("terminal_resize", { connectionId, cols, rows });
 export const ackTerminal = (connectionId: string, bytes: number) => invoke<void>("terminal_ack", { connectionId, bytes });
-
-// ContextSwitcher
-export const readCsTasks = () => invoke<CsTask[]>("read_cs_tasks");
 
 // Native folder picker (returns null if cancelled)
 export const pickFolder = () => invoke<string | null>("pick_folder");

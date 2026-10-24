@@ -1,6 +1,6 @@
 //! Durable task lifecycle. External calls never hold the SQLite mutex.
-use crate::workflow::{binding, pane_owner, Target, Workflow};
-use rusqlite::{params, Connection, OptionalExtension};
+use crate::workflow::{Target, Workflow, binding, pane_owner};
+use rusqlite::{Connection, OptionalExtension, params};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Flow {
@@ -24,6 +24,7 @@ mod tests {
         panes: BTreeMap<String, (Target, Option<String>)>,
         created: usize,
         prepared: Vec<Option<String>>,
+        directories: Vec<String>,
         sent: Vec<String>,
         closed: Vec<String>,
         missing_id: bool,
@@ -79,12 +80,13 @@ mod tests {
         fn prepare_codex(
             &self,
             t: &Target,
-            _: &str,
+            cwd: &str,
             resume: Option<&str>,
             _: &str,
         ) -> Result<Target, String> {
             let mut s = self.0.lock().unwrap();
             s.prepared.push(resume.map(str::to_string));
+            s.directories.push(cwd.into());
             if s.prepare_error {
                 return Err("timeout".into());
             }
@@ -143,6 +145,8 @@ mod tests {
         crate::db::init(&db).unwrap();
         db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p1','P1','.','workspace','now'),('p2','P2','.','workspace','now');
             INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p1','A','todo','now','now'),('b','p2','B','todo','now','now');").unwrap();
+        // Historical duplicate association fixture keeps testing cross-project pane ownership.
+        db.execute_batch("DROP INDEX project_workspace_identity; UPDATE projects SET herdr_session='default',workspace_id='w1',sync_status='ready';").unwrap();
         let fake = Arc::new(Fake::default());
         (
             Workflow {
@@ -151,6 +155,25 @@ mod tests {
             },
             fake,
         )
+    }
+    #[test]
+    fn directory_sync_does_not_change_a_saved_conversations_working_directory() {
+        let (app, herdr) = fixture();
+        app.start_task("a", "hello", &uuid::Uuid::new_v4().to_string())
+            .unwrap();
+        app.db
+            .lock()
+            .unwrap()
+            .execute(
+                "UPDATE projects SET root_path='changed-directory' WHERE id='p1'",
+                [],
+            )
+            .unwrap();
+        app.complete_task("a", &uuid::Uuid::new_v4().to_string())
+            .unwrap();
+        app.start_task("a", "must not resend", &uuid::Uuid::new_v4().to_string())
+            .unwrap();
+        assert_eq!(herdr.0.lock().unwrap().directories, vec![".", "."]);
     }
     fn op() -> String {
         uuid::Uuid::new_v4().to_string()
@@ -482,9 +505,11 @@ pub fn view(db: &Connection, task: &str) -> Result<Flow, String> {
 
 impl Workflow {
     fn project_context(&self, task: &str) -> Result<(String, String, String), String> {
-        self.db.lock().map_err(err)?.query_row(
-            "SELECT p.herdr_workspace,p.root_path,t.status FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",
-            [task], |r|Ok((r.get(0)?,r.get(1)?,r.get(2)?))).map_err(err)
+        let db = self.db.lock().map_err(err)?;
+        let workspace = crate::projects::task_identity(&db, task, self.herdr.session())?;
+        db.query_row(
+            "SELECT COALESCE(s.cwd,d.cwd,p.root_path),t.status FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id LEFT JOIN task_working_directories d ON d.task_id=t.id WHERE t.id=?1",
+            [task], |r|Ok((workspace,r.get(0)?,r.get(1)?))).map_err(err)
     }
     fn begin_flow(&self, task: &str, id: &str, kind: &str) -> Result<bool, String> {
         if uuid::Uuid::parse_str(id).is_err() {
@@ -520,6 +545,9 @@ impl Workflow {
             return Err("dispatch.verify_required".into());
         }
         tx.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,created_at) VALUES (?1,?2,?3,'pending',?4)",params![id,task,kind,now()]).map_err(err)?;
+        if kind == "start" {
+            tx.execute("INSERT OR IGNORE INTO task_working_directories(task_id,cwd) SELECT t.id,COALESCE(s.cwd,p.root_path) FROM tasks t JOIN projects p ON p.id=t.project_id LEFT JOIN task_sessions s ON s.task_id=t.id WHERE t.id=?1",[task]).map_err(err)?;
+        }
         tx.commit().map_err(err)?;
         Ok(true)
     }
@@ -538,6 +566,7 @@ impl Workflow {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
         ensure_operation(&tx, task, op)?;
+        crate::workflow::ensure_project_target(&tx, task, target, self.herdr.session())?;
         if pane_owner(&tx, target)?.is_some_and(|owner| owner != task) {
             return Err("binding.occupied".into());
         }
@@ -591,12 +620,12 @@ impl Workflow {
         tx.commit().map_err(err)
     }
     pub fn start_task(&self, task: &str, prompt: &str, op: &str) -> Result<Outcome, String> {
-        let (workspace, cwd, _) = self.project_context(task)?;
         if !self.begin_flow(task, op, "start")? {
             return Ok(Outcome::default());
         }
         let mut touched = false;
         let result = (|| {
+            let (workspace, cwd, _) = self.project_context(task)?;
             let b = self.binding(task)?;
             let saved = view(&*self.db.lock().map_err(err)?, task)?.session_id;
             // A retained task pane (e.g. completion without a session ID) still owns its conversation.
@@ -680,6 +709,9 @@ impl Workflow {
         })();
         if let Err(ref e) = result {
             self.end_flow(op, if touched { "unknown" } else { "failed" }, e)?;
+            if !touched {
+                self.db.lock().map_err(err)?.execute("DELETE FROM task_working_directories WHERE task_id=?1 AND NOT EXISTS(SELECT 1 FROM task_bindings WHERE task_id=?1) AND NOT EXISTS(SELECT 1 FROM task_sessions WHERE task_id=?1)",[task]).map_err(err)?;
+            }
         }
         result
     }

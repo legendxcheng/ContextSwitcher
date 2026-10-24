@@ -157,7 +157,7 @@ impl Cli {
             .ok_or("herdr.invalid_response")?;
         let matches: Vec<_> = spaces
             .iter()
-            .filter(|w| w.get("label").and_then(Value::as_str) == Some(workspace))
+            .filter(|w| w.get("workspace_id").and_then(Value::as_str) == Some(workspace))
             .collect();
         if matches.len() != 1 {
             return Err("binding.workspace_ambiguous".into());
@@ -208,6 +208,64 @@ fn field<'a>(v: &'a Value, key: &str) -> Result<&'a str, String> {
         .ok_or_else(|| "herdr.invalid_response".into())
 }
 impl Herdr for Cli {
+    fn session(&self) -> &str {
+        &self.session
+    }
+    fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
+        let doc = self.json(&["workspace", "list"])?;
+        let spaces = doc
+            .pointer("/result/workspaces")
+            .and_then(Value::as_array)
+            .ok_or("herdr.invalid_response")?;
+        let directories = workspace_directories(self.session_file().as_deref()).unwrap_or_default();
+        let mut ids = std::collections::HashSet::new();
+        spaces
+            .iter()
+            .map(|w| {
+                let id = field(w, "workspace_id")?;
+                if !ids.insert(id.to_string()) {
+                    return Err("herdr.invalid_response".into());
+                }
+                Ok(crate::projects::Workspace {
+                    id: id.into(),
+                    name: field(w, "label")?.into(),
+                    directory: directories.get(id).cloned(),
+                })
+            })
+            .collect()
+    }
+    fn create_workspace(
+        &self,
+        name: &str,
+        cwd: &str,
+    ) -> Result<crate::projects::Workspace, SendError> {
+        let doc = self.request(&[
+            "workspace",
+            "create",
+            "--label",
+            name,
+            "--cwd",
+            cwd,
+            "--no-focus",
+        ])?;
+        let parse = || {
+            let w = doc
+                .pointer("/result/workspace")
+                .ok_or("herdr.invalid_response")?;
+            Ok(crate::projects::Workspace {
+                id: field(w, "workspace_id")?.into(),
+                name: field(w, "label")?.into(),
+                directory: Some(cwd.into()),
+            })
+        };
+        parse().map_err(|message: String| SendError {
+            message,
+            uncertain: true,
+        })
+    }
+    fn rename_workspace(&self, id: &str, name: &str) -> Result<(), String> {
+        self.json(&["workspace", "rename", id, name]).map(|_| ())
+    }
     fn available(&self, workspace: &str, cwd: &str) -> Result<Vec<Target>, String> {
         let workspace_id = self.resolve_workspace_id(workspace)?;
         let doc = self.json(&["pane", "list", "--workspace", &workspace_id])?;
@@ -439,6 +497,49 @@ impl Herdr for Cli {
 }
 
 impl Cli {
+    fn session_file(&self) -> Option<PathBuf> {
+        if let Some(path) = std::env::var_os("KANBAN_HERDR_SESSION_FILE") {
+            return Some(path.into());
+        }
+        // Never mix another session's IDs with default's persisted directory metadata.
+        if self.session != "default" || std::env::var_os("HERDR_CONFIG_PATH").is_some() {
+            return None;
+        }
+        std::env::var_os("APPDATA")
+            .map(PathBuf::from)
+            .map(|p| p.join("herdr/session.json"))
+    }
+}
+fn workspace_directories(
+    path: Option<&std::path::Path>,
+) -> Option<std::collections::HashMap<String, String>> {
+    let file = std::fs::File::open(path?).ok()?;
+    if file.metadata().ok()?.len() > 8 * 1024 * 1024 {
+        return None;
+    }
+    let doc: Value = serde_json::from_reader(file.take(8 * 1024 * 1024)).ok()?;
+    if doc.get("version")?.as_u64()? != 3 {
+        return None;
+    }
+    let mut result = std::collections::HashMap::new();
+    let mut ids = std::collections::HashSet::new();
+    for workspace in doc.get("workspaces")?.as_array()? {
+        let id = workspace.get("id")?.as_str()?;
+        if !ids.insert(id) {
+            return None;
+        }
+        if let Some(cwd) = workspace
+            .get("identity_cwd")
+            .and_then(Value::as_str)
+            .filter(|d| std::path::Path::new(d).is_dir())
+        {
+            result.insert(id.into(), cwd.into());
+        }
+    }
+    Some(result)
+}
+
+impl Cli {
     fn inspect_pane(&self, workspace: &str, pane: &str) -> Result<(Target, Value), String> {
         let doc = self.json(&["pane", "get", pane])?;
         let mut info = doc
@@ -533,6 +634,34 @@ fn submit_windows_codex(
 
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn workspace_directory_metadata_is_versioned_and_never_uses_pane_cwd() {
+        let path =
+            std::env::temp_dir().join(format!("kanban-directories-{}.json", uuid::Uuid::new_v4()));
+        let cwd = std::env::current_dir()
+            .unwrap()
+            .to_string_lossy()
+            .to_string();
+        let data = serde_json::json!({"version":3,"workspaces":[
+            {"id":"w1","identity_cwd":cwd},
+            {"id":"w2","panes":[{"cwd":cwd}]},
+            {"id":"w3","identity_cwd":"Z:/kanban-nonexistent-directory"}
+        ]});
+        std::fs::write(&path, data.to_string()).unwrap();
+        let dirs = super::workspace_directories(Some(&path)).unwrap();
+        assert_eq!(dirs.len(), 1);
+        assert_eq!(dirs["w1"], cwd);
+        let mut incompatible = data.clone();
+        incompatible["version"] = 4.into();
+        std::fs::write(&path, incompatible.to_string()).unwrap();
+        assert!(super::workspace_directories(Some(&path)).is_none());
+        std::fs::write(&path, "{broken").unwrap();
+        assert!(super::workspace_directories(Some(&path)).is_none());
+        std::fs::remove_file(&path).unwrap();
+        assert!(super::workspace_directories(Some(&path)).is_none());
+        assert!(super::workspace_directories(None).is_none());
+    }
     use super::*;
 
     #[test]

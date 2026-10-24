@@ -1,163 +1,97 @@
-import { useState, useEffect } from "react";
-import type { Project, CsTask } from "./types";
+import { useState, useEffect, useRef } from "react";
+import type { Project, ProjectSnapshot } from "./types";
 import * as api from "./api";
+import { tr, errorText } from "./i18n";
 
 interface ProjectFormDialogProps {
   existing?: Project | null;
   onClose: () => void;
   onSaved: () => void;
 }
-
 export function ProjectFormDialog({ existing, onClose, onSaved }: ProjectFormDialogProps) {
   const [name, setName] = useState(existing?.name ?? "");
-  const [rootPath, setRootPath] = useState(existing?.root_path ?? "");
-  const [herdrWs, setHerdrWs] = useState(existing?.herdr_workspace ?? "");
-  const [csTaskId, setCsTaskId] = useState<string | null>(existing?.cs_task_id ?? null);
+  const [root, setRoot] = useState(existing?.root_path ?? "");
+  const [mode, setMode] = useState(existing ? (existing.workspace_id && existing.sync_status !== "missing" ? "edit" : "link") : "create");
+  const [selected, setSelected] = useState("");
+  const [snapshot, setSnapshot] = useState<ProjectSnapshot | null>(null);
+  const [loading, setLoading] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
-
-  const [csTasks, setCsTasks] = useState<CsTask[]>([]);
-  const [csLoading, setCsLoading] = useState(false);
-
+  const [uncertain, setUncertain] = useState(false);
+  const [useHerdrDirectory, setUseHerdrDirectory] = useState(false);
+  const busy = useRef(false);
+  const operation = useRef(crypto.randomUUID());
+  const [refresh, setRefresh] = useState(0);
   useEffect(() => {
-    setCsLoading(true);
-    api.readCsTasks()
-      .then((t) => setCsTasks(t))
-      .catch(() => setCsTasks([]))
-      .finally(() => setCsLoading(false));
-  }, []);
-
-  async function handleSave() {
-    if (!name.trim() || !rootPath.trim() || !herdrWs.trim()) {
-      setError("名称、本地目录、Herdr Workspace 均不能为空");
-      return;
-    }
-    setSaving(true);
-    setError("");
+    if (mode !== "link") return;
+    let active = true;
+    setLoading(true);
+    api.syncProjects().then((s) => { if (active) { setSnapshot(s); setError(""); } })
+      .catch((e) => { if (active) setError(errorText(e)); })
+      .finally(() => { if (active) setLoading(false); });
+    return () => { active = false; };
+  }, [mode, refresh]);
+  async function save() {
+    if (busy.current) return;
+    if (mode === "create" && (!name.trim() || !root.trim())) { setError(tr("workspace.invalid_input")); return; }
+    busy.current = true; setSaving(true); setError("");
     try {
-      if (existing) {
-        await api.updateProject(existing.id, name.trim(), rootPath.trim(), herdrWs.trim(), csTaskId);
-      } else {
-        await api.createProject(name.trim(), rootPath.trim(), herdrWs.trim(), csTaskId);
-      }
-      onSaved();
-      onClose();
+      if (uncertain) await api.recoverWorkspace(operation.current);
+      else if (mode === "create") await api.createProject(name.trim(), root.trim(), operation.current);
+      else if (mode === "link") await api.linkWorkspace(existing?.id ?? null, selected, root.trim() || null);
+      else if (existing) await api.updateProject(existing.id, name.trim(), useHerdrDirectory ? "" : root !== existing.root_path ? root.trim() : null);
+      onSaved(); onClose();
     } catch (e) {
-      setError(String(e));
-    } finally {
-      setSaving(false);
-    }
+      setError(errorText(e));
+      if (mode === "create") {
+        // Durable operation state, not the error text, determines whether retry may create.
+        try {
+          const ops = await api.workspaceOperations();
+          const pending = ops.find((o) => o.id === operation.current);
+          setUncertain(!!pending && pending.state !== "failed");
+        } catch { setUncertain(true); }
+      }
+    } finally { busy.current = false; setSaving(false); }
   }
-
-  const csStatusColor: Record<string, string> = {
-    todo: "#6b6b82",
-    in_progress: "#5a8fd4",
-    completed: "#3db87a",
-    paused: "#e0a33a",
-    blocked: "#e05c5c",
-    review: "#b87de8",
-  };
-
-  return (
-    <div className="dialog-overlay" onMouseDown={onClose}>
-      <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
-        <h3>{existing ? "编辑项目" : "新建项目"}</h3>
-
-        <div className="dialog-section">
-          <label>项目名称</label>
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="My Feature"
-            autoFocus
-            onKeyDown={(e) => { if (e.key === "Enter") handleSave(); if (e.key === "Escape") onClose(); }}
-          />
+  const candidates = snapshot?.workspaces.filter((w) => !snapshot.projects.some((p) => p.id !== existing?.id && p.herdr_session === snapshot.session && p.workspace_id === w.id)) ?? [];
+  const directoryReadonly = mode === "edit" && existing?.directory_source === "herdr";
+  const close = () => { if (!busy.current) onClose(); };
+  return <div className="dialog-overlay" onMouseDown={close}>
+    <section className="dialog workspace-dialog" role="dialog" aria-label={tr(existing ? "workspace.edit" : "workspace.new")} onMouseDown={(e) => e.stopPropagation()}>
+      <h3>{tr(existing ? "workspace.edit" : "workspace.new")}</h3>
+      <p className="hint">{tr("workspace.source_help")}</p>
+      {!existing && <div className="workspace-mode">
+        <button disabled={saving || uncertain} className={mode === "create" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("create")}>{tr("workspace.new")}</button>
+        <button disabled={saving || uncertain} className={mode === "link" ? "btn-primary" : "btn-secondary"} onClick={() => setMode("link")}>{tr("workspace.add_existing")}</button>
+      </div>}
+      {mode === "link" ? <div className="dialog-section">
+        <label htmlFor="workspace-choice">{tr("workspace.choose")}</label>
+        <select id="workspace-choice" disabled={saving || loading} value={selected} onChange={(e) => { setSelected(e.target.value); const w = candidates.find((w) => w.id === e.target.value); setRoot(w?.directory ?? ""); }}>
+          <option value="">{tr("workspace.choose")}</option>
+          {candidates.map((w) => <option key={w.id} value={w.id}>{w.name} · {w.directory || tr("workspace.directory_missing")} · {w.id}</option>)}
+        </select>
+        <button className="btn-ghost" disabled={saving || loading} onClick={() => setRefresh((n) => n + 1)}>{tr("workspace.refresh")}</button>
+        {!loading && snapshot && !candidates.length && <p className="hint">{tr("workspace.no_candidates")}</p>}
+      </div> : <div className="dialog-section">
+        <label htmlFor="workspace-name">{tr("workspace.name")}</label>
+        <input id="workspace-name" value={name} disabled={saving || uncertain} onChange={(e) => setName(e.target.value)} autoFocus />
+      </div>}
+      <div className="dialog-section">
+        <label htmlFor="workspace-directory">{tr("workspace.directory")}</label>
+        <div className="workspace-path">
+          <input id="workspace-directory" value={useHerdrDirectory ? existing?.herdr_directory ?? "" : root} readOnly={!!directoryReadonly || useHerdrDirectory || (mode === "link" && !!candidates.find((w) => w.id === selected)?.directory)} disabled={saving || uncertain} onChange={(e) => setRoot(e.target.value)} />
+          {!directoryReadonly && !useHerdrDirectory && <button type="button" className="btn-secondary" disabled={saving || uncertain} onClick={async () => { try { const path = await api.pickFolder(); if (path) setRoot(path); } catch (e) { setError(errorText(e)); } }}>{tr("workspace.browse")}</button>}
         </div>
-
-        <div className="dialog-section">
-          <label>本地目录（@ 文件引用根路径）</label>
-          <div style={{ display: "flex", gap: "6px" }}>
-            <input
-              style={{ flex: 1 }}
-              value={rootPath}
-              onChange={(e) => setRootPath(e.target.value)}
-              placeholder="E:\MyProject"
-            />
-            <button
-              type="button"
-              className="btn-secondary"
-              style={{ whiteSpace: "nowrap", flexShrink: 0 }}
-              onClick={async () => {
-                const picked = await api.pickFolder();
-                if (picked) setRootPath(picked);
-              }}
-            >
-              浏览…
-            </button>
-          </div>
-        </div>
-
-        <div className="dialog-section">
-          <label>Herdr Workspace 名称</label>
-          <input
-            value={herdrWs}
-            onChange={(e) => setHerdrWs(e.target.value)}
-            placeholder="my-workspace"
-          />
-        </div>
-
-        <div className="dialog-section">
-          <label>关联 ContextSwitcher 任务（可选）</label>
-          {csLoading ? (
-            <div className="loading-row"><span className="spinner" />读取中…</div>
-          ) : csTasks.length === 0 ? (
-            <p className="hint">未找到 ContextSwitcher 任务（ContextSwitcher 未安装或无数据）</p>
-          ) : (
-            <div className="cs-task-list">
-              <div
-                className={`cs-task-item${csTaskId === null ? " selected" : ""}`}
-                onClick={() => setCsTaskId(null)}
-              >
-                <span className="cs-task-item-name" style={{ color: "var(--text-muted)" }}>不关联</span>
-              </div>
-              {csTasks.map((t) => (
-                <div
-                  key={t.id}
-                  className={`cs-task-item${csTaskId === t.id ? " selected" : ""}`}
-                  onClick={() => {
-                    setCsTaskId(t.id);
-                    // Auto-fill name and herdr workspace from the CS task if not already set
-                    if (!name.trim()) setName(t.name);
-                    if (!herdrWs.trim() && t.herdr_workspace) setHerdrWs(t.herdr_workspace);
-                  }}
-                >
-                  <span
-                    className="cs-task-status"
-                    style={{
-                      background: `${csStatusColor[t.status] ?? "#6b6b82"}22`,
-                      color: csStatusColor[t.status] ?? "#6b6b82",
-                    }}
-                  >
-                    {t.status}
-                  </span>
-                  <span className="cs-task-item-name">{t.name}</span>
-                  {t.herdr_workspace && (
-                    <span className="cs-task-item-ws">herdr:{t.herdr_workspace}</span>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-
-        {error && <p className="error">{error}</p>}
-        <div className="dialog-actions">
-          <button onClick={onClose} className="btn-secondary">取消</button>
-          <button onClick={handleSave} disabled={saving} className="btn-primary">
-            {saving ? <><span className="spinner" />保存中…</> : "保存"}
-          </button>
-        </div>
+        {existing && <p className="hint">{tr(`workspace.directory_${existing.directory_source}`)}</p>}
+        {existing?.herdr_directory && existing.directory_source !== "herdr" && <label className="workspace-directory-option"><input type="checkbox" checked={useHerdrDirectory} disabled={saving} onChange={(e) => setUseHerdrDirectory(e.target.checked)} />{tr("workspace.use_directory")} · {existing.herdr_directory}</label>}
       </div>
-    </div>
-  );
+      {existing?.workspace_id && mode === "edit" && <button className="btn-ghost" disabled={saving} onClick={() => setMode("link")}>{tr("workspace.relink")}</button>}
+      {error && <p className="error" role="alert">{error}</p>}
+      {uncertain && <p className="hint">{tr("workspace.verify_help")}</p>}
+      <div className="dialog-actions">
+        <button className="btn-secondary" disabled={saving} onClick={close}>{tr("common.cancel")}</button>
+        <button className="btn-primary" disabled={saving || loading || (mode === "link" && !selected)} onClick={save}>{tr(saving ? "workspace.saving" : uncertain ? "workspace.recover" : mode === "create" ? "workspace.create" : "workspace.save")}</button>
+      </div>
+    </section>
+  </div>;
 }

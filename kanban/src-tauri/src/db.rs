@@ -110,11 +110,36 @@ pub fn init(conn: &Connection) -> Result<()> {
         )?;
         tx.commit()?;
     }
+    if !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=6)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        let tx = conn.unchecked_transaction()?;
+        tx.execute_batch("ALTER TABLE projects ADD COLUMN herdr_session TEXT;
+            ALTER TABLE projects ADD COLUMN workspace_id TEXT;
+            ALTER TABLE projects ADD COLUMN sync_status TEXT NOT NULL DEFAULT 'unlinked';
+            ALTER TABLE projects ADD COLUMN directory_source TEXT NOT NULL DEFAULT 'fallback';
+            ALTER TABLE projects ADD COLUMN herdr_directory TEXT;
+            CREATE UNIQUE INDEX project_workspace_identity ON projects(herdr_session,workspace_id) WHERE workspace_id IS NOT NULL;
+            INSERT INTO schema_migrations(version) VALUES (6);")?;
+        tx.commit()?;
+    }
+    conn.execute_batch("CREATE TABLE IF NOT EXISTS workspace_operations(
+        id TEXT PRIMARY KEY, session TEXT NOT NULL, name TEXT NOT NULL, cwd TEXT NOT NULL,
+        workspace_id TEXT, project_id TEXT NOT NULL, state TEXT NOT NULL CHECK(state IN ('pending','unknown','succeeded','failed')),
+        error TEXT NOT NULL DEFAULT '', created_at TEXT NOT NULL);
+        CREATE TABLE IF NOT EXISTS workspace_exclusions(session TEXT NOT NULL,workspace_id TEXT NOT NULL,PRIMARY KEY(session,workspace_id));
+        CREATE TABLE IF NOT EXISTS task_working_directories(task_id TEXT PRIMARY KEY REFERENCES tasks(id) ON DELETE CASCADE,cwd TEXT NOT NULL);
+        INSERT OR IGNORE INTO task_working_directories(task_id,cwd)
+            SELECT t.id,COALESCE(s.cwd,p.root_path) FROM tasks t JOIN projects p ON p.id=t.project_id
+            LEFT JOIN task_sessions s ON s.task_id=t.id WHERE EXISTS(SELECT 1 FROM task_bindings b WHERE b.task_id=t.id);")?;
     Ok(())
 }
 
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
+    conn.execute("UPDATE workspace_operations SET state='unknown',error='workspace.interrupted' WHERE state='pending'", [])?;
     conn.execute("UPDATE lifecycle_operations SET state='unknown',error='flow.interrupted' WHERE state='pending'", [])?;
     conn.execute(
         "UPDATE dispatch_operations SET state='unknown' WHERE state='pending'",

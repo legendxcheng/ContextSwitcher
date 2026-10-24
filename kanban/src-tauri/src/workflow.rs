@@ -1,6 +1,6 @@
 //! Task/pane ownership and dispatch, shared by the Tauri command boundary.
 use crate::models::DispatchRecord;
-use rusqlite::{params, Connection, OptionalExtension};
+use rusqlite::{Connection, OptionalExtension, params};
 use std::sync::{Arc, Mutex};
 
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize, PartialEq)]
@@ -19,8 +19,40 @@ pub struct SendError {
     pub message: String,
     pub uncertain: bool,
 }
+pub(crate) fn ensure_project_target(
+    db: &Connection,
+    task: &str,
+    target: &Target,
+    session: &str,
+) -> Result<(), String> {
+    if target.session != session
+        || crate::projects::task_identity(db, task, session)? != target.workspace_id
+    {
+        return Err("binding.identity_changed".into());
+    }
+    Ok(())
+}
 
 pub trait Herdr: Send + Sync {
+    fn session(&self) -> &str {
+        "default"
+    }
+    fn workspaces(&self) -> Result<Vec<crate::projects::Workspace>, String> {
+        Err("workspace.unsupported".into())
+    }
+    fn create_workspace(
+        &self,
+        _name: &str,
+        _cwd: &str,
+    ) -> Result<crate::projects::Workspace, SendError> {
+        Err(SendError {
+            message: "workspace.unsupported".into(),
+            uncertain: false,
+        })
+    }
+    fn rename_workspace(&self, _id: &str, _name: &str) -> Result<(), String> {
+        Err("workspace.unsupported".into())
+    }
     fn available(&self, _workspace: &str, _cwd: &str) -> Result<Vec<Target>, String> {
         Err("flow.unsupported".into())
     }
@@ -199,6 +231,7 @@ impl Workflow {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
         crate::lifecycle::ensure_idle(&tx, task, None)?;
+        ensure_project_target(&tx, task, &target, self.herdr.session())?;
         if binding(&tx, task)?.operation.is_some() {
             return Err("dispatch.verify_required".into());
         }
@@ -207,12 +240,10 @@ impl Workflow {
             params![task,target.session,pane,serde_json::to_string(&target).map_err(err)?]).map_err(err)?;
         tx.commit().map_err(err)
     }
-    fn workspace(&self, task: &str) -> Result<String, String> {
+    pub(crate) fn workspace(&self, task: &str) -> Result<String, String> {
         let db = self.db.lock().map_err(err)?;
         crate::tasks::ensure_active(&db, task)?;
-        db.query_row(
-            "SELECT p.herdr_workspace FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",
-            [task],|r|r.get(0)).map_err(err)
+        crate::projects::task_identity(&db, task, self.herdr.session())
     }
     pub fn binding(&self, task: &str) -> Result<Binding, String> {
         binding(&*self.db.lock().map_err(err)?, task)
@@ -294,6 +325,7 @@ impl Workflow {
             let mut conn = self.db.lock().map_err(err)?;
             let tx = conn.transaction().map_err(err)?;
             crate::lifecycle::ensure_idle(&tx, task, lifecycle)?;
+            ensure_project_target(&tx, task, &target, self.herdr.session())?;
             let b = binding(&tx, task)?;
             if b.operation.is_some() {
                 return Err("dispatch.verify_required".into());
@@ -319,6 +351,7 @@ impl Workflow {
                 had_binding: b.target.is_some(),
             };
             let json = serde_json::to_string(&target).map_err(err)?;
+            tx.execute("INSERT OR IGNORE INTO task_working_directories(task_id,cwd) SELECT t.id,p.root_path FROM tasks t JOIN projects p ON p.id=t.project_id WHERE t.id=?1",[task]).map_err(err)?;
             tx.execute("INSERT INTO task_bindings(task_id,session,pane_id,target_json,state) VALUES (?1,?2,?3,?4,'reserved') ON CONFLICT(task_id) DO UPDATE SET state='reserved'",
                 params![task,target.session,pane,json]).map_err(|_|"binding.occupied".to_string())?;
             tx.execute("INSERT INTO dispatch_operations(id,task_id,workspace,target_json,prompt,created_at,state,had_binding) VALUES (?1,?2,?3,?4,?5,?6,'pending',?7)",
@@ -482,6 +515,8 @@ mod tests {
         crate::db::init(&db).unwrap();
         db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p1','One','.','one','now'),('p2','Two','.','one','now');
             INSERT INTO tasks(id,project_id,name,status,created_at,updated_at) VALUES ('a','p1','A','todo','now','now'),('b','p2','B','todo','now','now');").unwrap();
+        // Historical duplicate association fixture keeps testing cross-project pane ownership.
+        db.execute_batch("DROP INDEX project_workspace_identity; UPDATE projects SET herdr_session='default',workspace_id='w1',sync_status='ready';").unwrap();
         let herdr = Arc::new(FakeHerdr::default());
         (
             Workflow {
@@ -529,9 +564,11 @@ mod tests {
         });
         assert_ne!(archived.is_ok(), dispatched.is_ok());
         if archived.is_ok() {
-            assert!(crate::tasks::list(&app.db.lock().unwrap(), "p1")
-                .unwrap()
-                .is_empty());
+            assert!(
+                crate::tasks::list(&app.db.lock().unwrap(), "p1")
+                    .unwrap()
+                    .is_empty()
+            );
             assert!(external.sent.lock().unwrap().is_empty());
         } else {
             assert_eq!(
@@ -746,12 +783,19 @@ mod tests {
         assert!(workspace.starts_with("kanban-acceptance-"));
         let (mut app, _) = fixture();
         app.herdr = Arc::new(crate::herdr::Cli::from_env());
+        let spaces = app.herdr.workspaces().unwrap();
+        let selected: Vec<_> = spaces.iter().filter(|w| w.name == workspace).collect();
+        assert_eq!(selected.len(), 1);
+        let workspace_id = &selected[0].id;
         app.db
             .lock()
             .unwrap()
-            .execute("UPDATE projects SET herdr_workspace=?1", [&workspace])
+            .execute(
+                "UPDATE projects SET workspace_id=?1,herdr_session=?2",
+                params![workspace_id, app.herdr.session()],
+            )
             .unwrap();
-        let targets = app.herdr.targets(&workspace).unwrap();
+        let targets = app.herdr.targets(workspace_id).unwrap();
         let pane = &targets.first().expect("isolated agent required").pane_id;
         let reply = format!(
             "KANBAN_ACCEPT_{}",
@@ -812,12 +856,19 @@ mod tests {
         let (mut app, _) = fixture();
         let cli = crate::herdr::Cli::from_env();
         app.herdr = Arc::new(cli.clone());
+        let spaces = app.herdr.workspaces().unwrap();
+        let selected: Vec<_> = spaces.iter().filter(|w| w.name == workspace).collect();
+        assert_eq!(selected.len(), 1);
+        let workspace_id = &selected[0].id;
         app.db
             .lock()
             .unwrap()
-            .execute("UPDATE projects SET herdr_workspace=?1", [&workspace])
+            .execute(
+                "UPDATE projects SET workspace_id=?1,herdr_session=?2",
+                params![workspace_id, app.herdr.session()],
+            )
             .unwrap();
-        let pane = app.herdr.targets(&workspace).unwrap()[0].pane_id.clone();
+        let pane = app.herdr.targets(workspace_id).unwrap()[0].pane_id.clone();
         app.dispatch(
             "a",
             &pane,
