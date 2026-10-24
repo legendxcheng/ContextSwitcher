@@ -750,11 +750,13 @@ describe("保留其他拖放与派发行为", () => {
     expect(sendPrompt).not.toHaveBeenCalled();
   });
 
-  it("拖到 Agent 仍预选目标且等待确认", async () => {
+  it("有 Agent 时不展示顶部派发栏，仍可从卡片选择 Agent", async () => {
     await renderBoard();
-    dropOn(screen.getByText(agent.title).closest(".agent-chip") as HTMLElement);
+    expect(screen.queryByText("拖拽任务到 Agent 即可选择派发")).toBeNull();
+    expect(screen.queryByText(agent.title)).toBeNull();
+    fireEvent.click(screen.getByRole("button", { name: "派发" }));
     const select = await screen.findByRole("combobox", { name: "独立 Agent" }) as HTMLSelectElement;
-    expect(select.value).toBe(agent.pane_id);
+    expect(within(select).getByRole("option", { name: new RegExp(agent.title) })).toBeTruthy();
     expectNoStatusWrite();
     expect(sendPrompt).not.toHaveBeenCalled();
   });

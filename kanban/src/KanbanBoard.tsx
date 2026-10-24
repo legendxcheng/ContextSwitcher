@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import type { Task, Project, TaskStatus, HerdrAgent } from "./types";
+import type { Task, Project, TaskStatus } from "./types";
 import { TaskCard } from "./TaskCard";
 import { DispatchDialog } from "./DispatchDialog";
 import { TaskFormDialog } from "./TaskFormDialog";
@@ -33,8 +33,6 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const draggingIdRef = useRef<string | null>(null);
   const dragFromControl = useRef(false);
   const [editingTaskId, setEditingTaskId] = useState<string | null>(null);
-  const [agents, setAgents] = useState<HerdrAgent[]>([]);
-  const [dragOverAgent, setDragOverAgent] = useState<string | null>(null);
   const [pendingDispatch, setPendingDispatch] = useState<{ task: Task; paneId: string } | null>(null);
   const [recoveringTaskId, setRecoveringTaskId] = useState<string | null>(null);
   const [selectedTaskId, setSelectedTaskId] = useState<string | null>(null);
@@ -51,7 +49,6 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   const [terminalWidth, setTerminalWidth] = useState<number | null>(null);
   const [maximumWidth, setMaximumWidth] = useState(800);
   const loadSequence = useRef(0);
-  const agentSequence = useRef(0);
   const taskRequest = useRef<Promise<Task[]> | null>(null);
   const mounted = useRef(true);
   useEffect(() => {
@@ -74,35 +71,8 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     setTerminalWidth(Math.max(280, Math.min(maximumWidth, width)));
   };
 
-  // Pre-fetch agents for drag-to-dispatch chips
-  useEffect(() => {
-    if (!project.herdr_workspace) return;
-    refreshAgents();
-    return () => { ++agentSequence.current; };
-  }, [project.id, project.workspace_id]);
-
-  async function refreshAgents() {
-    const sequence = ++agentSequence.current;
-    try {
-      const items = await api.herdrListAgents(project.id);
-      if (sequence === agentSequence.current) setAgents(items);
-    } catch { if (sequence === agentSequence.current) setAgents([]); }
-  }
-
-  async function handleAgentDrop(e: React.DragEvent, agent: HerdrAgent) {
-    e.preventDefault();
-    setDragOverAgent(null);
-    // Use ref as primary source — dataTransfer.getData can return empty on WebView2
-    const taskId = draggingIdRef.current ?? e.dataTransfer.getData("taskId");
-    if (!taskId) return;
-    const task = tasks.find((t) => t.id === taskId);
-    if (!task || activeFlows.current.has(taskId) || flowUnresolved(task)) return;
-    setPendingDispatch({ task, paneId: agent.pane_id });
-  }
-
   async function load(refreshDiscovery = true) {
     if (!mounted.current) return;
-    if (refreshDiscovery) refreshAgents();
     const sequence = ++loadSequence.current;
     setLoading(true);
     const request = !refreshDiscovery && taskRequest.current ? taskRequest.current : api.listTasks(project.id);
@@ -136,7 +106,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     setRepairingTaskId((current) => current === id ? null : current);
     setRecoveringTaskId((current) => current === id ? null : current);
     setPendingDispatch((current) => current?.task.id === id ? null : current);
-    load(); refreshAgents();
+    load();
   }
 
   // Keyboard shortcut: N opens the same form as the toolbar action.
@@ -237,27 +207,6 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
               <button className="btn-primary" onClick={() => setCreatingTask(true)}><Icon name="plus" />新建任务<kbd>N</kbd></button>
             </div>
           </div>
-          {agents.length > 0 && (
-            <div
-              className={`agent-dispatch-bar${draggingId ? " is-dragging" : ""}`}
-              onDragOver={(e) => e.preventDefault()}
-            >
-              <span className="agent-bar-label"><Icon name="terminal" />Agent</span>
-              {agents.map((agent) => (
-                <div
-                  key={agent.pane_id}
-                  className={`agent-chip${dragOverAgent === agent.pane_id ? " drag-over" : ""}${pendingDispatch ? " disabled" : ""}`}
-                  onDragOver={(e) => { e.preventDefault(); e.stopPropagation(); setDragOverAgent(agent.pane_id); }}
-                  onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setDragOverAgent(null); }}
-                  onDrop={(e) => { e.preventDefault(); e.stopPropagation(); handleAgentDrop(e, agent); }}
-                >
-                  <span className="agent-chip-status" data-status={agent.status} style={{ pointerEvents: "none" }} />
-                  <span className="agent-chip-title" style={{ pointerEvents: "none" }}>{agent.title || agent.name}</span>
-                </div>
-              ))}
-              <span className="agent-bar-hint">拖拽任务到 Agent 即可选择派发</span>
-            </div>
-          )}
           <div className="kanban-columns">
           {COLUMNS.map(({ status, label, emptyIcon, emptyText, hint }) => {
             const col = tasks.filter((t) => taskColumn(t) === status);

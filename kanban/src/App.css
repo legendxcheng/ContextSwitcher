@@ -125,39 +125,6 @@ body {
 
 .kanban-columns { flex: 1; min-height: 0; display: grid; grid-template-columns: repeat(3, minmax(240px, 1fr)); gap: 16px; overflow-x: auto; padding: 2px 2px 8px; }
 
-/* Agent dispatch bar ─────────────────────────────────────── */
-.agent-dispatch-bar { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; padding: 12px 14px; margin-bottom: 18px; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius-sm); transition: border-color 140ms; flex-shrink: 0; }
-.agent-dispatch-bar.is-dragging { border-color: #3ecf8e60; }
-
-.agent-bar-label { display: flex; align-items: center; gap: 7px; font-size: 14px; color: var(--text-muted); white-space: nowrap; margin-right: 5px; }
-
-.agent-chip { display: flex; align-items: center; gap: 7px; padding: 3px 9px; border-radius: 4px; border: 1px solid var(--n5); background: var(--surface-2); font-size: 14px; color: var(--n8); transition: border-color 140ms, background 140ms; }
-.agent-chip.drag-over {
-  border-color: var(--accent);
-  background: var(--accent-dim);
-  color: var(--accent-hover);
-}
-.agent-chip.disabled { pointer-events: none; opacity: 0.5; }
-
-.agent-chip-status {
-  width: 7px;
-  height: 7px;
-  border-radius: 50%;
-  background: var(--n5);
-  flex-shrink: 0;
-}
-.agent-chip-status[data-status="running"],
-.agent-chip-status[data-status="active"]  { background: var(--success); }
-.agent-chip-status[data-status="waiting"] { background: var(--warning); }
-.agent-chip-status[data-status="idle"]    { background: var(--n5); }
-
-.agent-chip-title {
-  max-width: 180px;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
 .kanban-col { min-height: 0; min-width: 0; display: flex; flex-direction: column; border: 1px solid var(--border); border-radius: var(--radius); background: #191919; outline: 1px solid transparent; transition: outline-color 140ms, background 140ms; }
 .kanban-col.drag-over {
   outline-color: var(--accent);
@@ -540,8 +507,6 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .toolbar-count { font-size: 14px; background: var(--surface-2); color: var(--text-muted); min-width: 20px; border-radius: 4px; text-align: center; padding: 0 5px; }
 .board-toolbar-actions { gap: 18px; }
 .board-summary { font-size: 14px; color: var(--text-muted); white-space: nowrap; font-variant-numeric: tabular-nums; }
-.agent-bar-hint { font-size: 14px; color: var(--text-muted); margin-left: auto; }
-.is-dragging .agent-chip { border-style: dashed; border-color: var(--accent); }
 .col-title svg { color: var(--text-muted); }
 .col-in_progress .col-title svg { color: var(--warning); }
 .col-done .col-title svg { color: var(--accent); }
@@ -574,10 +539,8 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
   .workspace-bar { padding: 0 22px; }
   .board-content { padding: 0 20px 16px; }
   .kanban-columns { gap: 12px; }
-  .agent-bar-hint { display: none; }
 }
 @media (max-height: 700px) {
-  .agent-dispatch-bar { padding-top: 8px; padding-bottom: 8px; margin-bottom: 12px; }
   .board-toolbar { margin-bottom: 12px; }
 }
 @media (max-width: 700px) {
@@ -618,7 +581,7 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 
 /* Respond to the resizable board, not just the window width. */
 @container (max-width: 700px) {
-  .board-summary, .agent-bar-hint { display: none; }
+  .board-summary { display: none; }
   .workspace-bar { padding-inline: 16px; gap: 10px; }
   .board-content { padding-inline: 14px; }
   .board-toolbar { gap: 8px; }
