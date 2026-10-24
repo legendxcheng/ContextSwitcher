@@ -110,13 +110,8 @@ pub fn delete_task(
     terminals: State<Arc<crate::terminal::TerminalManager>>,
     id: String,
 ) -> Result<(), String> {
-    let conn = state.0.lock().map_err(|e| e.to_string())?;
-    crate::lifecycle::ensure_idle(&conn, &id, None)?;
-    if crate::workflow::binding(&conn, &id)?.operation.is_some() {
-        return Err("dispatch.verify_required".into());
-    }
-    conn.execute("DELETE FROM tasks WHERE id=?1", params![id])
-        .map_err(|e| e.to_string())?;
+    let mut conn = state.0.lock().map_err(|e| e.to_string())?;
+    crate::tasks::delete(&mut conn, &id)?;
     drop(conn);
     terminals.close_task(&id);
     Ok(())

@@ -18,6 +18,11 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
   const boundPane = task.binding?.target?.pane_id;
   const [selected, setSelected] = useState<string>(boundPane ?? preselectedPaneId ?? "");
   const operation = useRef(crypto.randomUUID());
+  const mounted = useRef(false);
+  useEffect(() => {
+    mounted.current = true;
+    return () => { mounted.current = false; };
+  }, []);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string>("");
   const [preview, setPreview] = useState<string>("");
@@ -62,11 +67,16 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
       // Expand files, retaining skill names for the target agent to resolve.
       const doc = JSON.parse(task.prompt_json);
       const resolved = await resolveMentions(doc, project.root_path);
+      if (!mounted.current) return;
       await api.dispatchToHerdr(task.id, selected, project.herdr_workspace, resolved, operation.current);
+      // A closed dialog may refresh persisted results, but cannot select a task
+      // or close another dialog that the user has opened in the meantime.
+      if (!mounted.current) { onRefresh?.(); return; }
       setLoading(false);
       onDispatched();
       onClose();
     } catch (e) {
+      if (!mounted.current) { onRefresh?.(); return; }
       setError(errorText(e));
       if (!String(e).includes("verify_required")) operation.current = crypto.randomUUID();
       onRefresh?.();
@@ -75,7 +85,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
   }
 
   return (
-    <div className="dialog-overlay" onMouseDown={() => { if (!loading) onClose(); }}>
+    <div className="dialog-overlay" onMouseDown={onClose}>
       <div className="dialog" onMouseDown={(e) => e.stopPropagation()}>
         <h3>派发任务: {task.name}</h3>
         <div className="dialog-section">
@@ -109,7 +119,7 @@ export function DispatchDialog({ task, project, onClose, onDispatched, preselect
         </div>
         {error && <p className="error">{error}</p>}
         <div className="dialog-actions">
-          <button onClick={onClose} disabled={loading} className="btn-secondary">取消</button>
+          <button onClick={onClose} className="btn-secondary">取消</button>
           <button onClick={handleDispatch} disabled={loading || !selected || !!task.binding?.operation} className="btn-primary">
             {loading ? "派发中…" : "派发"}
           </button>

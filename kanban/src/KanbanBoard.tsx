@@ -97,8 +97,8 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   useEffect(() => { mounted.current = true; load(); return () => { mounted.current = false; ++loadSequence.current; }; }, [project.id]);
   useTaskFlowUpdates(project.id, () => load(false));
 
-  function handleArchived(id: string) {
-    // Archive already committed: a failed list refresh must not resurrect this card.
+  function handleRemoved(id: string) {
+    // Removal already committed: a failed list refresh must not resurrect this card.
     ++loadSequence.current;
     setTasks((current) => current.filter((task) => task.id !== id));
     setEditingTaskId((current) => current === id ? null : current);
@@ -259,7 +259,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
                           onStart={() => moveTask(task, "in_progress")}
                           onFlowRecover={() => recoverFlow(task)}
                           onChanged={load}
-                          onArchived={() => handleArchived(task.id)}
+                          onRemoved={() => handleRemoved(task.id)}
                           onRecover={() => setRecoveringTaskId(task.id)}
                           selected={selectedTaskId === task.id}
                           onSelect={taskColumn(task) === "in_progress" ? () => { if (!suppressClick.current) setSelectedTaskId(task.id); } : undefined}

@@ -115,6 +115,15 @@ pub fn ensure_active(db: &Connection, id: &str) -> Result<(), String> {
     Ok(())
 }
 
+/// Task absence revokes its workers. Keep operation evidence, including unknown sends;
+/// cascading foreign keys release bindings, saved sessions and working directories.
+pub fn delete(db: &mut Connection, id: &str) -> Result<(), String> {
+    let tx = db.transaction().map_err(err)?;
+    tx.execute("DELETE FROM tasks WHERE id=?1", [id])
+        .map_err(err)?;
+    tx.commit().map_err(err)
+}
+
 pub fn archive(db: &mut Connection, id: &str) -> Result<(), String> {
     let tx = db.transaction().map_err(err)?;
     let (status, archived): (String, bool) = tx
@@ -161,6 +170,42 @@ mod tests {
     use super::*;
     use crate::models::TaskPriority;
     use rusqlite::Connection;
+
+    #[test]
+    fn delete_unresolved_task_is_local_persistent_and_idempotent() {
+        let path = std::env::temp_dir().join(format!("kanban-delete-{}.db", uuid::Uuid::new_v4()));
+        let mut db = Connection::open(&path).unwrap();
+        crate::db::init(&db).unwrap();
+        db.execute_batch("INSERT INTO projects(id,name,root_path,herdr_workspace,created_at) VALUES ('p','P','.','workspace','now');").unwrap();
+        let task = create(&db, "p", "异常任务", TaskPriority::Normal, "{}").unwrap();
+        let other = create(&db, "p", "保留任务", TaskPriority::Normal, "{}").unwrap();
+        db.execute("INSERT INTO lifecycle_operations(id,task_id,kind,state,error,created_at) VALUES ('lost',?1,'start','unknown','agent_not_found','now')", [&task.id]).unwrap();
+        delete(&mut db, &task.id).unwrap();
+        delete(&mut db, &task.id).unwrap();
+        assert_eq!(
+            list(&db, "p")
+                .unwrap()
+                .iter()
+                .map(|t| &t.id)
+                .collect::<Vec<_>>(),
+            vec![&other.id]
+        );
+        drop(db);
+        let db = Connection::open(&path).unwrap();
+        crate::db::init(&db).unwrap();
+        crate::db::recover_interrupted(&db).unwrap();
+        assert_eq!(list(&db, "p").unwrap().len(), 1);
+        assert_eq!(ensure_active(&db, &task.id), Err("task.missing".into()));
+        assert_eq!(
+            crate::lifecycle::view(&db, &task.id)
+                .unwrap()
+                .state
+                .as_deref(),
+            Some("unknown")
+        );
+        drop(db);
+        std::fs::remove_file(path).unwrap();
+    }
 
     #[test]
     fn created_prompt_and_mentions_survive_database_reopen() {

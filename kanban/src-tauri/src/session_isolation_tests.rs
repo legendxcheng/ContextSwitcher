@@ -77,6 +77,7 @@ fn live_tasks_keep_distinct_sessions_through_completion_and_resume() {
             workspace,
             keepalive_cwd.to_str().unwrap(),
             "kanban-acceptance-keepalive",
+            &|| Ok(()),
         )
         .unwrap();
     let ids = {

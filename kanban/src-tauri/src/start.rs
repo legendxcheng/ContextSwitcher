@@ -35,6 +35,7 @@ impl Workflow {
         let (request, event, accepted) = {
             let mut db = self.db.lock().map_err(err)?;
             let tx = db.transaction().map_err(err)?;
+            crate::tasks::ensure_active(&tx, task)?;
             let existing: Option<(String, String)> = tx
                 .query_row(
                     "SELECT task_id,kind FROM lifecycle_operations WHERE id=?1",
@@ -112,7 +113,7 @@ impl Workflow {
             };
             if let Some(error) = error {
                 if let Ok(db) = worker.db.lock() {
-                    let _ = db.execute("UPDATE lifecycle_operations SET state='unknown',error=?2 WHERE id=?1 AND state='pending'",
+                    let _ = db.execute("UPDATE lifecycle_operations SET state='unknown',error=?2 WHERE id=?1 AND state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)",
                         params![changed.operation_id, error]);
                 }
             }
@@ -131,7 +132,7 @@ impl Workflow {
         let updated = db
             .execute(
                 "UPDATE start_requests SET stage=?2 WHERE operation_id=?1
-            AND EXISTS(SELECT 1 FROM lifecycle_operations WHERE id=?1 AND state='pending')",
+            AND EXISTS(SELECT 1 FROM lifecycle_operations o JOIN tasks t ON t.id=o.task_id WHERE o.id=?1 AND o.state='pending')",
                 params![op, stage],
             )
             .map_err(err)?;

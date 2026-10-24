@@ -296,11 +296,19 @@ impl Herdr for Cli {
         });
         Ok(targets)
     }
-    fn create_pane(&self, workspace: &str, cwd: &str, label: &str) -> Result<Target, String> {
+    fn create_pane(
+        &self,
+        workspace: &str,
+        cwd: &str,
+        label: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
+        check_current()?;
         if !std::path::Path::new(cwd).is_dir() {
             return Err("flow.directory_missing".into());
         }
         let id = self.resolve_workspace_id(workspace)?;
+        check_current()?;
         let doc = self.json(&[
             "tab",
             "create",
@@ -334,7 +342,9 @@ impl Herdr for Cli {
         cwd: &str,
         resume: Option<&str>,
         name: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<Target, String> {
+        check_current()?;
         if let Some(id) = resume {
             uuid::Uuid::parse_str(id).map_err(|_| "flow.session_invalid")?;
         }
@@ -353,13 +363,16 @@ impl Herdr for Cli {
                 return Err("flow.not_idle".into());
             }
             self.check_target(&live).map_err(|e| e.message)?;
+            check_current()?;
             self.json(&["agent", "send-keys", &live.pane_id, "ctrl+u"])?;
-            self.send(&live, "/quit").map_err(|e| e.message)?;
+            self.send_checked(&live, "/quit", check_current)
+                .map_err(|e| e.message)?;
         } else if !live.agent.is_empty() {
             return Err("flow.not_idle".into());
         }
         let deadline = Instant::now() + Duration::from_secs(10);
         loop {
+            check_current()?;
             let (shell, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
             if shell.terminal_id != target.terminal_id {
                 return Err("binding.identity_changed".into());
@@ -389,6 +402,7 @@ impl Herdr for Cli {
             args.extend(["resume", id]);
         }
         args.extend(["-C", cwd]);
+        check_current()?;
         self.json(&args)?;
         let (live, info) = self.inspect_pane(&target.workspace_id, &target.pane_id)?;
         if live.terminal_id != target.terminal_id
@@ -450,8 +464,14 @@ impl Herdr for Cli {
             .iter()
             .any(|p| p.get("pane_id").and_then(Value::as_str) == Some(&target.pane_id)))
     }
-    fn close_pane(&self, target: &Target) -> Result<(), String> {
+    fn close_pane(
+        &self,
+        target: &Target,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
+        check_current()?;
         self.check_target(target).map_err(|e| e.message)?;
+        check_current()?;
         self.json(&["pane", "close", &target.pane_id])?;
         Ok(())
     }
@@ -501,6 +521,21 @@ impl Herdr for Cli {
             .collect())
     }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError> {
+        self.send_checked(target, prompt, &|| Ok(()))
+    }
+    fn send_checked(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), SendError> {
+        let check = || {
+            check_current().map_err(|message| SendError {
+                message,
+                uncertain: false,
+            })
+        };
+        check()?;
         // Revalidate immediately before sending, after the ownership reservation.
         self.check_target(target)?;
         #[cfg(windows)]
@@ -508,10 +543,14 @@ impl Herdr for Cli {
             return submit_windows_codex(
                 &target.pane_id,
                 prompt,
-                |args| self.request(args).map(|_| ()),
+                |args| {
+                    check()?;
+                    self.request(args).map(|_| ())
+                },
                 || self.check_target(target),
             );
         }
+        check()?;
         self.request(&["agent", "prompt", &target.pane_id, prompt])
             .map(|_| ())
     }

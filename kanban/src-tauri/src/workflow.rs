@@ -56,7 +56,13 @@ pub trait Herdr: Send + Sync {
     fn available(&self, _workspace: &str, _cwd: &str) -> Result<Vec<Target>, String> {
         Err("flow.unsupported".into())
     }
-    fn create_pane(&self, _workspace: &str, _cwd: &str, _label: &str) -> Result<Target, String> {
+    fn create_pane(
+        &self,
+        _workspace: &str,
+        _cwd: &str,
+        _label: &str,
+        _check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<Target, String> {
         Err("flow.unsupported".into())
     }
     fn prepare_codex(
@@ -65,6 +71,7 @@ pub trait Herdr: Send + Sync {
         _cwd: &str,
         _resume: Option<&str>,
         _name: &str,
+        _check_current: &dyn Fn() -> Result<(), String>,
     ) -> Result<Target, String> {
         Err("flow.unsupported".into())
     }
@@ -74,7 +81,11 @@ pub trait Herdr: Send + Sync {
     fn pane_exists(&self, _target: &Target) -> Result<bool, String> {
         Err("flow.unsupported".into())
     }
-    fn close_pane(&self, _target: &Target) -> Result<(), String> {
+    fn close_pane(
+        &self,
+        _target: &Target,
+        _check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), String> {
         Err("flow.unsupported".into())
     }
     fn find_created(&self, _workspace: &str, _label: &str) -> Result<Option<Target>, String> {
@@ -88,6 +99,19 @@ pub trait Herdr: Send + Sync {
             .ok_or_else(|| "binding.identity_changed".into())
     }
     fn send(&self, target: &Target, prompt: &str) -> Result<(), SendError>;
+    /// Multi-command adapters also check between external side effects.
+    fn send_checked(
+        &self,
+        target: &Target,
+        prompt: &str,
+        check_current: &dyn Fn() -> Result<(), String>,
+    ) -> Result<(), SendError> {
+        check_current().map_err(|message| SendError {
+            message,
+            uncertain: false,
+        })?;
+        self.send(target, prompt)
+    }
 }
 
 pub struct Workflow {
@@ -358,7 +382,10 @@ impl Workflow {
                 params![op.id,task,op.workspace,json,prompt,op.created_at,op.had_binding]).map_err(|_|"dispatch.verify_required".to_string())?;
             tx.commit().map_err(err)?;
         }
-        match self.herdr.send(&target, prompt) {
+        crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
+        match self.herdr.send_checked(&target, prompt, &|| {
+            crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)
+        }) {
             Ok(()) => match self.finish(&op, true, "") {
                 Ok(()) => Ok(record(&op)),
                 Err(_) => {
@@ -379,7 +406,7 @@ impl Workflow {
     fn mark_unknown(&self, id: &str) {
         if let Ok(conn) = self.db.lock() {
             let _ = conn.execute(
-                "UPDATE dispatch_operations SET state='unknown' WHERE id=?1 AND state='pending'",
+                "UPDATE dispatch_operations SET state='unknown' WHERE id=?1 AND state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=dispatch_operations.task_id)",
                 [id],
             );
         }
@@ -407,6 +434,7 @@ impl Workflow {
     fn finish(&self, op: &Operation, sent: bool, evidence: &str) -> Result<(), String> {
         let mut conn = self.db.lock().map_err(err)?;
         let tx = conn.transaction().map_err(err)?;
+        crate::tasks::ensure_active(&tx, &op.task_id)?;
         let changed = tx.execute("UPDATE dispatch_operations SET state=?1,evidence=?2 WHERE id=?3 AND state IN ('pending','unknown')",
             params![if sent {"sent"} else {"not_sent"},evidence,op.id]).map_err(err)?;
         if changed != 1 {
@@ -457,6 +485,7 @@ mod tests {
         uncertain: Mutex<bool>,
         unavailable: Mutex<bool>,
         replaced: Mutex<bool>,
+        after_send: Mutex<Option<Box<dyn Fn() + Send + Sync>>>,
     }
     impl Herdr for FakeHerdr {
         fn targets(&self, _: &str) -> Result<Vec<Target>, String> {
@@ -500,6 +529,9 @@ mod tests {
                 });
             }
             self.sent.lock().unwrap().push(prompt.into());
+            if let Some(callback) = self.after_send.lock().unwrap().as_ref() {
+                callback();
+            }
             if *self.uncertain.lock().unwrap() {
                 Err(SendError {
                     message: "timeout".into(),
@@ -526,6 +558,43 @@ mod tests {
             herdr,
         )
     }
+    #[test]
+    fn deletion_is_atomic_and_late_dispatch_cannot_reclaim_the_pane() {
+        for uncertain in [false, true] {
+            let (app, external) = fixture();
+            *external.uncertain.lock().unwrap() = uncertain;
+            let db = app.db.clone();
+            *external.after_send.lock().unwrap() = Some(Box::new(move || {
+                let mut db = db.lock().unwrap();
+                db.execute_batch("CREATE TRIGGER fail_delete BEFORE DELETE ON task_bindings BEGIN SELECT RAISE(ABORT,'disk failure'); END;").unwrap();
+                assert!(crate::tasks::delete(&mut db, "a").is_err());
+                assert_eq!(crate::tasks::list(&db, "p1").unwrap().len(), 1);
+                assert!(binding(&db, "a").unwrap().target.is_some());
+                db.execute_batch("DROP TRIGGER fail_delete").unwrap();
+                crate::tasks::delete(&mut db, "a").unwrap();
+                crate::tasks::delete(&mut db, "a").unwrap();
+            }));
+            assert!(app.dispatch("a", "w1:p1", "old", "old-op").is_err());
+            let db = app.db.lock().unwrap();
+            assert!(crate::tasks::list(&db, "p1").unwrap().is_empty());
+            crate::db::recover_interrupted(&db).unwrap();
+            let evidence = binding(&db, "a").unwrap();
+            assert!(evidence.target.is_none());
+            assert_eq!(evidence.operation.unwrap().state, "pending");
+            let new =
+                crate::tasks::create(&db, "p1", "A", crate::models::TaskPriority::Normal, "{}")
+                    .unwrap();
+            assert_ne!(new.id, "a");
+            drop(db);
+            *external.after_send.lock().unwrap() = None;
+            *external.uncertain.lock().unwrap() = false;
+            app.dispatch(&new.id, "w1:p1", "new", "new-op").unwrap();
+            assert!(app.resolve("a", "old-op", true, "late result").is_err());
+            assert_eq!(app.binding(&new.id).unwrap().state, "valid");
+            assert_eq!(*external.sent.lock().unwrap(), vec!["old", "new"]);
+        }
+    }
+
     #[test]
     fn failed_archive_rolls_back_the_card_and_binding_then_retry_can_succeed() {
         let (app, external) = fixture();

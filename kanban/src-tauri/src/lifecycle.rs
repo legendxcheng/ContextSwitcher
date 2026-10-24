@@ -2,6 +2,10 @@
 use crate::workflow::{Target, Workflow, binding, pane_owner};
 use rusqlite::{Connection, OptionalExtension, params};
 
+#[cfg(all(test, windows))]
+#[path = "delete_cli_tests.rs"]
+mod delete_cli_tests;
+
 #[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
 pub struct Flow {
     pub session_id: Option<String>,
@@ -37,9 +41,18 @@ mod tests {
         send_error: bool,
         create_error: bool,
         prepare_gate: Option<Arc<(Mutex<bool>, std::sync::Condvar)>>,
+        observe: Option<Arc<dyn Fn(&str) + Send + Sync>>,
     }
     #[derive(Default)]
     struct Fake(Mutex<State>);
+    impl Fake {
+        fn observe(&self, phase: &str) {
+            let callback = self.0.lock().unwrap().observe.clone();
+            if let Some(callback) = callback {
+                callback(phase);
+            }
+        }
+    }
     fn target(id: &str) -> Target {
         Target {
             session: "default".into(),
@@ -64,13 +77,22 @@ mod tests {
                 .collect())
         }
         fn available(&self, w: &str, _: &str) -> Result<Vec<Target>, String> {
-            Ok(self
+            let candidates = self
                 .targets(w)?
                 .into_iter()
                 .filter(|t| matches!(t.status.as_str(), "idle" | "done"))
-                .collect())
+                .collect();
+            self.observe("available");
+            Ok(candidates)
         }
-        fn create_pane(&self, _: &str, _: &str, _: &str) -> Result<Target, String> {
+        fn create_pane(
+            &self,
+            _: &str,
+            _: &str,
+            _: &str,
+            check_current: &dyn Fn() -> Result<(), String>,
+        ) -> Result<Target, String> {
+            check_current()?;
             let mut s = self.0.lock().unwrap();
             if s.create_error {
                 return Err("timeout".into());
@@ -78,6 +100,8 @@ mod tests {
             s.created += 1;
             let t = target(&format!("created-{}", s.created));
             s.panes.insert(t.pane_id.clone(), (t.clone(), None));
+            drop(s);
+            self.observe("created");
             Ok(t)
         }
         fn prepare_codex(
@@ -86,7 +110,10 @@ mod tests {
             cwd: &str,
             resume: Option<&str>,
             _: &str,
+            check_current: &dyn Fn() -> Result<(), String>,
         ) -> Result<Target, String> {
+            self.observe("preparing");
+            check_current()?;
             let mut s = self.0.lock().unwrap();
             s.prepared.push(resume.map(str::to_string));
             s.directories.push(cwd.into());
@@ -113,6 +140,8 @@ mod tests {
             let mut live = t.clone();
             live.process_id = uuid::Uuid::new_v4().to_string();
             s.panes.insert(t.pane_id.clone(), (live.clone(), Some(id)));
+            drop(s);
+            self.observe("prepared");
             Ok(live)
         }
         fn session_id(&self, t: &Target) -> Result<Option<String>, String> {
@@ -121,12 +150,20 @@ mod tests {
             if !live.same_identity(t) {
                 return Err("binding.identity_changed".into());
             }
-            Ok(if s.missing_id { None } else { id.clone() })
+            let result = if s.missing_id { None } else { id.clone() };
+            drop(s);
+            self.observe("session");
+            Ok(result)
         }
         fn pane_exists(&self, t: &Target) -> Result<bool, String> {
             Ok(self.0.lock().unwrap().panes.contains_key(&t.pane_id))
         }
-        fn close_pane(&self, t: &Target) -> Result<(), String> {
+        fn close_pane(
+            &self,
+            t: &Target,
+            check_current: &dyn Fn() -> Result<(), String>,
+        ) -> Result<(), String> {
+            check_current()?;
             let mut s = self.0.lock().unwrap();
             s.closed.push(t.pane_id.clone());
             if s.close_error {
@@ -141,7 +178,10 @@ mod tests {
         fn send(&self, _: &Target, prompt: &str) -> Result<(), SendError> {
             let mut s = self.0.lock().unwrap();
             s.sent.push(prompt.into());
-            if s.send_error {
+            let send_error = s.send_error;
+            drop(s);
+            self.observe("sent");
+            if send_error {
                 return Err(SendError {
                     message: "timeout".into(),
                     uncertain: true,
@@ -348,6 +388,100 @@ mod tests {
             fake.0.lock().unwrap().directories,
             vec!["updated-directory"]
         );
+    }
+
+    #[test]
+    fn deletion_during_external_start_steps_prevents_later_work_and_resurrection() {
+        for phase in [
+            "available",
+            "created",
+            "preparing",
+            "prepared",
+            "session",
+            "sent",
+        ] {
+            let (app, fake) = fixture();
+            let db = app.db.clone();
+            fake.0.lock().unwrap().observe = Some(Arc::new(move |observed| {
+                if observed == phase {
+                    crate::tasks::delete(&mut db.lock().unwrap(), "a").unwrap();
+                }
+            }));
+            assert!(app.start_task("a", "A", &op()).is_err());
+            assert!(
+                crate::tasks::list(&app.db.lock().unwrap(), "p1")
+                    .unwrap()
+                    .is_empty()
+            );
+            assert!(saved(&app, "a").is_none());
+            let s = fake.0.lock().unwrap();
+            assert_eq!(
+                s.created,
+                if phase == "available" { 0 } else { 1 },
+                "{phase}"
+            );
+            assert_eq!(
+                s.prepared.len(),
+                if ["available", "created", "preparing"].contains(&phase) {
+                    0
+                } else {
+                    1
+                },
+                "{phase}"
+            );
+            assert_eq!(s.sent.len(), if phase == "sent" { 1 } else { 0 }, "{phase}");
+            assert!(s.closed.is_empty());
+            drop(s);
+            // A late worker must not rewrite the evidence left at deletion.
+            assert_eq!(
+                view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+                Some("pending"),
+                "{phase}"
+            );
+            fake.0.lock().unwrap().observe = None;
+            app.start_task("b", "B", &op()).unwrap();
+            assert_eq!(status(&app, "b"), "in_progress");
+        }
+    }
+
+    #[test]
+    fn deleted_background_start_cannot_be_recovered_or_resubmitted() {
+        let (app, fake) = fixture();
+        let app = Arc::new(app);
+        set_prompt(&app, "a", "A");
+        let db = app.db.clone();
+        fake.0.lock().unwrap().observe = Some(Arc::new(move |phase| {
+            if phase == "preparing" {
+                crate::tasks::delete(&mut db.lock().unwrap(), "a").unwrap();
+            }
+        }));
+        let (tx, rx) = std::sync::mpsc::channel();
+        let db = app.db.clone();
+        let id = op();
+        app.submit_start(
+            "a",
+            &id,
+            Arc::new(move |_| {
+                if crate::tasks::ensure_active(&db.lock().unwrap(), "a").is_err() {
+                    let _ = tx.send(());
+                }
+            }),
+        )
+        .unwrap();
+        rx.recv_timeout(std::time::Duration::from_secs(3)).unwrap();
+        assert_eq!(
+            view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+            Some("pending")
+        );
+        crate::db::recover_interrupted(&app.db.lock().unwrap()).unwrap();
+        assert_eq!(
+            view(&app.db.lock().unwrap(), "a").unwrap().state.as_deref(),
+            Some("pending")
+        );
+        assert!(app.submit_start("a", &id, Arc::new(|_| {})).is_err());
+        assert!(app.recover_lifecycle("a", &id).is_err());
+        assert!(fake.0.lock().unwrap().prepared.is_empty());
+        assert!(fake.0.lock().unwrap().sent.is_empty());
     }
 
     #[test]
@@ -804,6 +938,9 @@ pub(crate) fn begin_flow_in(
 }
 
 impl Workflow {
+    fn check_flow(&self, task: &str, op: &str) -> Result<(), String> {
+        ensure_operation(&*self.db.lock().map_err(err)?, task, op)
+    }
     fn project_context(&self, task: &str) -> Result<(String, String, String), String> {
         let db = self.db.lock().map_err(err)?;
         let workspace = crate::projects::task_identity(&db, task, self.herdr.session())?;
@@ -823,7 +960,7 @@ impl Workflow {
             .lock()
             .map_err(err)?
             .execute(
-                "UPDATE lifecycle_operations SET state=?2,error=?3 WHERE id=?1",
+                "UPDATE lifecycle_operations SET state=?2,error=?3 WHERE id=?1 AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)",
                 params![id, state, error],
             )
             .map_err(err)?;
@@ -833,6 +970,7 @@ impl Workflow {
     pub(crate) fn fail_unstarted(&self, task: &str, op: &str, error: &str) -> Result<(), String> {
         let mut db = self.db.lock().map_err(err)?;
         let tx = db.transaction().map_err(err)?;
+        crate::tasks::ensure_active(&tx, task)?;
         let updated = tx.execute("UPDATE lifecycle_operations SET state='failed',error=?3 WHERE id=?1 AND task_id=?2 AND state='pending'",
             params![op, task, error]).map_err(err)?;
         if updated != 1 {
@@ -865,6 +1003,7 @@ impl Workflow {
         cwd: &str,
         expected: Option<&str>,
     ) -> Result<Option<String>, String> {
+        crate::tasks::ensure_active(&*self.db.lock().map_err(err)?, task)?;
         let id = self.herdr.session_id(target)?;
         if expected.is_some() && id.as_deref() != expected {
             return Err("flow.session_mismatch".into());
@@ -873,7 +1012,9 @@ impl Workflow {
             if uuid::Uuid::parse_str(id).is_err() {
                 return Err("flow.session_invalid".into());
             }
-            self.db.lock().map_err(err)?.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,?4) ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,cwd=excluded.cwd,updated_at=excluded.updated_at",params![task,id,cwd,now()]).map_err(err)?;
+            let db = self.db.lock().map_err(err)?;
+            crate::tasks::ensure_active(&db, task)?;
+            db.execute("INSERT INTO task_sessions(task_id,codex_session_id,cwd,updated_at) VALUES (?1,?2,?3,?4) ON CONFLICT(task_id) DO UPDATE SET codex_session_id=excluded.codex_session_id,cwd=excluded.cwd,updated_at=excluded.updated_at",params![task,id,cwd,now()]).map_err(err)?;
         }
         Ok(id)
     }
@@ -915,6 +1056,7 @@ impl Workflow {
     ) -> Result<Outcome, String> {
         let mut touched = false;
         let result = (|| {
+            self.check_flow(task, op)?;
             let (workspace, cwd) = match context {
                 Some(context) => context,
                 None => {
@@ -965,21 +1107,27 @@ impl Workflow {
                 Some(target) => target,
                 None => {
                     // Persisted operation UUID is also the tab label for crash reconciliation.
+                    self.check_flow(task, op)?;
                     touched = true;
-                    let target =
-                        self.herdr
-                            .create_pane(&workspace, &cwd, &format!("kanban-{op}"))?;
+                    let target = self.herdr.create_pane(
+                        &workspace,
+                        &cwd,
+                        &format!("kanban-{op}"),
+                        &|| self.check_flow(task, op),
+                    )?;
                     self.reserve_target(task, op, &target)?;
                     target
                 }
             };
             touched = true;
             progress("starting_agent")?;
+            self.check_flow(task, op)?;
             let live = self.herdr.prepare_codex(
                 &target,
                 &cwd,
                 saved.as_deref(),
                 &format!("kb-{}", &op.replace('-', "")[..24]),
+                &|| self.check_flow(task, op),
             )?;
             self.reserve_target(task, op, &live)?;
             self.save_session(task, &live, &cwd, saved.as_deref())?;
@@ -1042,7 +1190,9 @@ impl Workflow {
                     self.save_session(task, &live, &cwd, None)?
                         .ok_or("flow.session_missing")?;
                     close_attempted = true;
-                    self.herdr.close_pane(&live)?;
+                    self.check_flow(task, op)?;
+                    self.herdr
+                        .close_pane(&live, &|| self.check_flow(task, op))?;
                     if self.herdr.pane_exists(&live)? {
                         return Err("flow.close_pending".into());
                     }

@@ -149,9 +149,9 @@ pub fn init(conn: &Connection) -> Result<()> {
 /// Only called once when opening the application, never during a live command.
 pub fn recover_interrupted(conn: &Connection) -> Result<()> {
     conn.execute("UPDATE workspace_operations SET state='unknown',error='workspace.interrupted' WHERE state='pending'", [])?;
-    conn.execute("UPDATE lifecycle_operations SET state='unknown',error='flow.interrupted' WHERE state='pending'", [])?;
+    conn.execute("UPDATE lifecycle_operations SET state='unknown',error='flow.interrupted' WHERE state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=lifecycle_operations.task_id)", [])?;
     conn.execute(
-        "UPDATE dispatch_operations SET state='unknown' WHERE state='pending'",
+        "UPDATE dispatch_operations SET state='unknown' WHERE state='pending' AND EXISTS(SELECT 1 FROM tasks WHERE id=dispatch_operations.task_id)",
         [],
     )?;
     Ok(())
