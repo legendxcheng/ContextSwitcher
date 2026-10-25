@@ -9,6 +9,7 @@ import { tr, errorText } from "./i18n";
 import { notify } from "./Toast";
 
 interface ProjectSidebarProps {
+  inert?: boolean;
   projects: Project[];
   gitStatuses?: Record<string, ProjectGitStatus>;
   selectedId: string | null;
@@ -22,7 +23,7 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ projects, gitStatuses = {}, selectedId, onSelect, onChanged, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   const [showNew, setShowNew] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const dragging = useRef<string | null>(null);
@@ -57,7 +58,7 @@ export function ProjectSidebar({ projects, gitStatuses = {}, selectedId, onSelec
   }
 
   return (
-    <aside className="sidebar" aria-label="项目导航">
+    <aside className="sidebar" aria-label="项目导航" inert={inert}>
       <div className="sidebar-brand">
         <span className="brand-mark"><img src="/app-icon.svg" width={32} height={32} alt="" /></span>
         <span>herdr<span className="brand-subtitle"> / kanban</span></span>

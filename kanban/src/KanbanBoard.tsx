@@ -18,6 +18,8 @@ import { taskAgentStatus } from "./agentStatus";
 interface KanbanBoardProps {
   project: Project;
   onNewTaskShortcut?: () => void;
+  terminalMaximized?: boolean;
+  onToggleTerminalMaximized?: () => void;
 }
 
 const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyText: string; hint: string }[] = [
@@ -26,7 +28,7 @@ const COLUMNS: { status: TaskStatus; label: string; emptyIcon: IconName; emptyTe
   { status: "done", label: "完成", emptyIcon: "check", emptyText: "还没有完成的任务", hint: "完成的每一步，都会留在这里" },
 ];
 
-export function KanbanBoard({ project }: KanbanBoardProps) {
+export function KanbanBoard({ project, terminalMaximized = false, onToggleTerminalMaximized }: KanbanBoardProps) {
   const [tasks, setTasks] = useState<Task[]>([]);
   const [loading, setLoading] = useState(true);
   const [creatingTask, setCreatingTask] = useState(false);
@@ -159,7 +161,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
   useEffect(() => {
     function onKey(e: KeyboardEvent) {
       if (
-        e.key === "n" &&
+        !terminalMaximized && e.key === "n" &&
         !e.ctrlKey && !e.metaKey && !e.altKey &&
         !document.querySelector(".dialog-overlay") &&
         !(document.activeElement instanceof HTMLElement && document.activeElement.closest(".terminal-panel")) &&
@@ -174,7 +176,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
     }
     document.addEventListener("keydown", onKey);
     return () => document.removeEventListener("keydown", onKey);
-  }, []);
+  }, [terminalMaximized]);
 
   async function handleDrop(e: React.DragEvent, targetStatus: TaskStatus) {
     e.preventDefault();
@@ -235,7 +237,7 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
 
   return (
     <div className="kanban-board board-workspace" ref={workspaceRef} style={terminalWidth === null ? undefined : { "--terminal-width": `${terminalWidth}px` } as React.CSSProperties} onDragOver={(e) => e.preventDefault()}>
-      <div className="board-main">
+      <div className="board-main" inert={terminalMaximized}>
         {loading && tasks.length === 0 ? <div className="board-loading"><span className="spinner" /><span>加载中…</span></div> : <>
         <div className="workspace-bar">
           <h1 className="workspace-project" title={project.name}>{project.name}</h1>
@@ -352,13 +354,13 @@ export function KanbanBoard({ project }: KanbanBoardProps) {
         </div>
         </>}
       </div>
-      <div role="separator" tabIndex={0} aria-label={tr("terminal.adjust_width")} aria-orientation="vertical"
+      <div role="separator" tabIndex={0} inert={terminalMaximized} aria-label={tr("terminal.adjust_width")} aria-orientation="vertical"
         aria-valuemin={280} aria-valuemax={maximumWidth} aria-valuenow={terminalWidth ?? window.innerWidth / 3} className="terminal-splitter"
         onKeyDown={(e) => { if (e.key === "ArrowLeft" || e.key === "ArrowRight") { e.preventDefault(); setWidth((terminalWidth ?? window.innerWidth / 3) + (e.key === "ArrowLeft" ? 24 : -24)); } }}
         onPointerDown={(e) => { resizing.current = true; e.currentTarget.setPointerCapture(e.pointerId); e.preventDefault(); }}
         onPointerMove={(e) => { if (resizing.current && workspaceRef.current) setWidth(workspaceRef.current.getBoundingClientRect().right - e.clientX); }}
         onPointerUp={() => { resizing.current = false; }} onLostPointerCapture={() => { resizing.current = false; }} />
-      <TerminalPanel task={selectedTask} onRepair={selectedTask ? () => {
+      <TerminalPanel task={selectedTask} maximized={terminalMaximized} onToggleMaximized={onToggleTerminalMaximized} onRepair={selectedTask ? () => {
         if (selectedTask.binding?.operation) setRecoveringTaskId(selectedTask.id);
         else setRepairingTaskId(selectedTask.id);
       } : undefined} />

@@ -9,8 +9,14 @@ import { preparationLabel } from "./taskFlow";
 import { terminalAppearance } from "./terminalAppearance";
 import { changeTerminalFontSize, readTerminalFontSize, terminalFontSizeDelta } from "./terminalFontSize";
 import { attachTerminalScroll } from "./terminalScroll";
+import { Icon } from "./Icon";
 
-export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?: () => void }) {
+export function TerminalPanel({ task, onRepair, maximized = false, onToggleMaximized }: {
+  task: Task | null;
+  onRepair?: () => void;
+  maximized?: boolean;
+  onToggleMaximized?: () => void;
+}) {
   const host = useRef<HTMLDivElement>(null);
   const [state, setState] = useState("terminal.empty");
   const [error, setError] = useState("");
@@ -120,8 +126,15 @@ export function TerminalPanel({ task, onRepair }: { task: Task | null; onRepair?
   // Reconnect only when the selected identity/state changes, not on list refreshes.
   }, [task?.id, identity, bindingState, attempt, preparation]);
 
-  return <aside className="terminal-panel" aria-label={tr("terminal.label")}>
-    <header className="terminal-header"><strong>{task?.name ?? tr("terminal.label")}</strong><span role="status">{tr(state)}</span></header>
+  return <aside className={`terminal-panel${maximized ? " terminal-panel-maximized" : ""}`} aria-label={tr("terminal.label")}>
+    <header className="terminal-header">
+      <strong>{task?.name ?? tr("terminal.label")}</strong><span role="status">{tr(state)}</span>
+      {onToggleMaximized && <button type="button" className="btn-icon terminal-size-toggle"
+        aria-label={tr(maximized ? "terminal.restore" : "terminal.maximize")}
+        title={tr(maximized ? "terminal.restore" : "terminal.maximize")} onClick={onToggleMaximized}>
+        <Icon name={maximized ? "restore" : "maximize"} />
+      </button>}
+    </header>
     {!task && <p className="terminal-hint">{tr("terminal.empty")}</p>}
     {task && state !== "terminal.connected" && <div className="terminal-feedback">
       {error && <p role="alert">{error}</p>}

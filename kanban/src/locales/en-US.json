@@ -71,6 +71,8 @@
   "binding.save": "Save binding",
   "binding.repair_help": "Choose an agent dedicated to this task. Saving only changes the binding; it neither sends a prompt nor closes the old target.",
   "terminal.adjust_width": "Adjust terminal width",
+  "terminal.maximize": "Maximize terminal",
+  "terminal.restore": "Restore terminal",
   "binding.not_developing": "This task is no longer in development",
   "binding.identity_unknown": "Cannot identify the target; check the Agent in Herdr",
   "dispatch.operation_conflict": "The dispatch record changed; refresh and verify it",

@@ -2,7 +2,7 @@
 
 2026-10-24 图片输入增量：新建/编辑任务支持剪贴板图片、120px 缩略图、悬停删除及点击放大；图片持久化与两种派发路径见 6.3.1。实际通过的验证及原生 Ctrl+V 未覆盖项见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
-更新日期：2026-10-24（修复拖入任务后 Codex 首次回车未提交；新增 Workspace Git 分支显示；新增 Workspace 拖动与 Herdr 双向排序；新增 @ 文件相关性排序、忽略规则与路径/模糊查询；新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
+更新日期：2026-10-25（新增终端最大化与恢复；修复拖入任务后 Codex 首次回车未提交；新增 Workspace Git 分支显示；新增 Workspace 拖动与 Herdr 双向排序；新增 @ 文件相关性排序、忽略规则与路径/模糊查询；新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
 
 2026-10-24 本次增量：自动启动的任务共用对应 workspace 的 `kanban` Tab，各自独占 pane；并发分配与创建结果核实见 6.6 节，验证见[共用 Tab 验证记录](docs/verification/2026-10-24-kanban-shared-tab.md)。
 
@@ -85,7 +85,7 @@ kanban/
 │  ├─ MentionPopover.tsx           @/$ 搜索、键盘选择和节点插入
 │  ├─ fileDiscovery.test.tsx        @ 文件候选防抖、迟到响应、项目隔离及引用选择回归
 │  ├─ DispatchDialog.tsx           Agent 选择、预览和派发
-│  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次
+│  ├─ TerminalPanel.tsx            xterm 渲染、输入、尺寸、连接代次及最大化/恢复按钮
 │  ├─ terminalScroll.ts           连接级滚轮换算、有界队列、字符区命中与失效清理
 │  ├─ terminalAppearance.ts        本机 WezTerm 外观预设：字体、光标、ANSI 色板
 │  ├─ terminalFontSize.ts           字号快捷键识别、上下限及本机偏好保存
@@ -200,7 +200,7 @@ flowchart TD
 
 | 模块 | 拥有的状态/职责 | 与外部的交互 |
 | --- | --- | --- |
-| [App.tsx](kanban/src/App.tsx) | `selectedId`；从同步列表派生当前项目 | 将同步、排序状态与操作下传侧栏；按 Project ID 保持看板 |
+| [App.tsx](kanban/src/App.tsx) | `selectedId`、`terminalMaximized`；从同步列表派生当前项目 | 将同步、排序状态与操作下传侧栏；按 Project ID 保持看板；协调终端最大化和背景禁用，项目变化后恢复分栏 |
 | [useProjectSync.ts](kanban/src/useProjectSync.ts) | 项目、session、未决记录、刷新及排序状态 | 请求合并；重排前后增加代次，隔离旧刷新；失败只读回实际顺序 |
 | [useProjectGitStatus.ts](kanban/src/useProjectGitStatus.ts) | 独立于 Herdr 的项目 Git 状态 | 启动、目录变化及已有刷新触发查询；串行合并在途请求，拒绝迟到结果 |
 | [ProjectSidebar.tsx](kanban/src/ProjectSidebar.tsx) | 新建弹窗、编辑目标、拖动来源与插入位置 | 当前 session 的 ready 项可拖；松手提交稳定 ID 和下一项锚点；完成 CRUD 后刷新 |
@@ -528,6 +528,12 @@ Enter 前重新采集该目标的 `state_change_seq`，随后每约 200ms 查询
 不新增 IPC、数据库字段或迁移。原提示词可在真实 Windows Herdr/Codex 中复现成功回执但仍留在输入框；只拆开 Right/Enter 并延长等待仍可复现。最终验证包含原提示词连续三次、普通中文、多行与超过 11K 字符长文本，以及独立 Tauri/WebView2 + SQLite 的文本/技能节点两种拖放；每次均检查实际回复而非只检查回执。共享工作区 112 项 Rust、110 项前端测试及构建通过；8 项 opt-in live 默认跳过，其中本次提交矩阵和退出两项另行显式运行通过。详细证据、边界与运行中应用未替换的说明见[自动提交修复验收记录](docs/verification/2026-10-24-kanban-codex-submit.md)。
 
 ### 6.5 右侧终端与恢复
+
+2026-10-25 最大化增量：终端标题栏右侧提供“最大化终端”按钮，点击后同位置显示“恢复终端”；已连接、连接中、断线和空态均可操作。`App.terminalMaximized → KanbanBoard / TerminalPanel` 传递纯布局状态及切换回调；无项目时由 App 直接传给空终端。最大化使用原面板的 `position: fixed; inset: 0` 铺满窗口内容区，保留系统标题栏，层级低于既有对话框与通知。侧栏、看板和分隔线保留挂载与布局测量，使用 visibility 隐藏并设为 inert；看板 N 快捷键同时停用，避免误操作隐藏内容。
+
+切换不卸载或更改终端连接 effect 的依赖，沿用 ResizeObserver → FitAddon → onResize → terminal_resize 同步行列数；滚轮继续等待尺寸确认及对应帧渲染。恢复使用 KanbanBoard 原有 terminalWidth / widthAdjusted 状态；未手调仍按窗口 1/3，手调后保持像素宽度，窗口缩小时沿用上限约束。最大化状态不持久化，当前项目改变或重新打开应用回到分栏。按钮图标来自 Icon.tsx，提示与可访问名称使用中英文翻译键；不新增 IPC、Rust 改动或数据库迁移。
+
+本次全量前端 120 项测试、类型检查及生产构建通过；真实 Chromium + React/xterm/FitAddon、模拟 Tauri IPC 在 900×600、1280×800、1920×1080 完成 9 次最大化/恢复，始终保留同一 xterm 节点与连接（1 次 open、0 次 close）。手动宽度恢复、最大化期间窗口缩小、字符边界、输入、字号快捷键、滚轮六行、隐藏区域键盘隔离及中英文按钮通过。截图和探针位于 `.scratch/terminal-maximize/`；本增量未执行原生 Tauri/WebView2 或真实 Herdr 验收，也未重新打包安装，不复用历史原生结果充当本次证据。
 
 2026-10-24 滚轮修复（GitHub #21）：`TerminalPanel → terminalScroll.ts → terminal_scroll → TerminalManager::scroll` 将字符区滚轮送到 Herdr。常见一格（3 行或 120 CSS px）对应 6 行；触控板像素小数累积，反向时清空旧积累，步长不依赖字号。单批上限 24 行、队列上限 16 批，相邻同方向、位置和修饰键相同的批次合并并封顶，8ms 后发送且不因持续输入无限延后。标题及字符区外不转发；字符区阻止 xterm 本地滚动和页面重复处理。不转发鼠标点击。
 

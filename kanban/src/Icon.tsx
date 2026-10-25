@@ -7,6 +7,8 @@ const paths = {
   plus: "M12 5v14 M5 12h14",
   arrow: "M5 12h14 M13 6l6 6-6 6",
   terminal: "m5 7 5 5-5 5 M13 17h6",
+  maximize: "M8 3H3v5 M16 3h5v5 M3 16v5h5 M21 16v5h-5",
+  restore: "M8 3v5H3 M16 3v5h5 M3 16h5v5 M21 16h-5v5",
   circle: "M20 12a8 8 0 1 1-16 0 8 8 0 0 1 16 0",
   progress: "M12 4a8 8 0 1 1-8 8 M12 4v8l5 3",
   check: "m8 12 3 3 5-6 M21 12a9 9 0 1 1-18 0 9 9 0 0 1 18 0",

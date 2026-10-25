@@ -71,6 +71,8 @@
   "binding.save": "保存绑定",
   "binding.repair_help": "请选择此任务独占的 Agent。保存只修改绑定，不发送提示词，也不关闭旧目标。",
   "terminal.adjust_width": "调整终端宽度",
+  "terminal.maximize": "最大化终端",
+  "terminal.restore": "恢复终端",
   "binding.not_developing": "任务已离开开发中",
   "binding.identity_unknown": "无法确认目标身份，请检查 Herdr 中的 Agent",
   "dispatch.operation_conflict": "派发记录已变化，请刷新后核实",
