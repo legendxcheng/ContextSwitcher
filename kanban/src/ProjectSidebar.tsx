@@ -15,6 +15,7 @@ interface ProjectSidebarProps {
   selectedId: string | null;
   onSelect: (id: string) => void;
   onChanged: () => void;
+  onOverview?: () => void;
   operations?: WorkspaceOperation[];
   syncing?: boolean;
   syncError?: string;
@@ -23,7 +24,7 @@ interface ProjectSidebarProps {
   onMove?: (projectId: string, beforeProjectId: string | null) => Promise<void>;
 }
 
-export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
+export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, selectedId, onSelect, onChanged, onOverview, operations = [], syncing = false, syncError = "", session = null, reordering = false, onMove }: ProjectSidebarProps) {
   const [showNew, setShowNew] = useState(false);
   const [editTarget, setEditTarget] = useState<Project | null>(null);
   const dragging = useRef<string | null>(null);
@@ -66,6 +67,7 @@ export function ProjectSidebar({ inert = false, projects, gitStatuses = {}, sele
       <div className="sidebar-intro">把想法变成下一步。</div>
       <div className="sidebar-header">
         <h2>项目 <span className="sidebar-count">{projects.length}</span></h2>
+        {onOverview && <button onClick={onOverview} className="btn-icon" aria-label={tr("overview.title")} title={tr("overview.title")}><Icon name="board" /></button>}
         <button onClick={() => setShowNew(true)} className="btn-icon" aria-label="新建项目" title="新建项目"><Icon name="plus" /></button>
       </div>
       <div className="project-list" aria-busy={reordering} onDragLeave={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node | null)) setInsertion(null); }}>

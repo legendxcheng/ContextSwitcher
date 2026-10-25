@@ -244,7 +244,7 @@ impl Workflow {
         )
         .map_err(err)?;
         tx.execute(
-            "UPDATE tasks SET status='in_progress',updated_at=?2 WHERE id=?1",
+            "UPDATE tasks SET status='in_progress',completed_at=NULL,updated_at=?2 WHERE id=?1",
             params![task, now()],
         )
         .map_err(err)?;
@@ -399,7 +399,7 @@ impl Workflow {
             .lock()
             .map_err(err)?
             .execute(
-                "UPDATE tasks SET status='done',updated_at=?2 WHERE id=?1",
+                "UPDATE tasks SET status='done',completed_at=CASE WHEN status='done' THEN completed_at ELSE ?2 END,updated_at=?2 WHERE id=?1",
                 params![task, now()],
             )
             .map_err(err)?;

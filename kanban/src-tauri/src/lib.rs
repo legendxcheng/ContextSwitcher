@@ -11,6 +11,7 @@ mod project_commands;
 mod project_git;
 mod projects;
 mod start;
+mod task_overview;
 mod tasks;
 mod terminal;
 mod work_commands;
@@ -70,6 +71,7 @@ pub fn run() {
             project_commands::recover_workspace,
             project_commands::link_workspace,
             commands::list_tasks,
+            commands::task_overview,
             commands::create_task,
             commands::update_task,
             commands::update_task_status,

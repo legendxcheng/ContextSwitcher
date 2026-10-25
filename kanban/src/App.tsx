@@ -5,12 +5,14 @@ import { ToastContainer } from "./Toast";
 import { Icon } from "./Icon";
 import { TerminalPanel } from "./TerminalPanel";
 import { useProjectSync } from "./useProjectSync";
+import { TaskOverviewDialog } from "./TaskOverviewDialog";
 import "./App.css";
 
 export default function App() {
   const { projects, gitStatuses, operations, syncing, error, refresh, session, reordering, move } = useProjectSync();
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [terminalMaximized, setTerminalMaximized] = useState(false);
+  const [overviewOpen, setOverviewOpen] = useState(false);
 
   useEffect(() => { setSelectedId((id) => projects.some((p) => p.id === id) ? id : projects[0]?.id ?? null); }, [projects]);
 
@@ -34,6 +36,7 @@ export default function App() {
         session={session}
         reordering={reordering}
         onMove={move}
+        onOverview={() => setOverviewOpen(true)}
       />
       <main className="board-area">
         {selectedProject ? (
@@ -51,6 +54,9 @@ export default function App() {
           </div>
         )}
       </main>
+      {overviewOpen && <TaskOverviewDialog projects={projects}
+        onClose={() => setOverviewOpen(false)}
+        onSelect={id => { setSelectedId(id); setOverviewOpen(false); }} />}
     </div>
   );
 }

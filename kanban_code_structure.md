@@ -1,5 +1,7 @@
 # Kanban 代码结构与关键流程分析
 
+2026-10-25 任务概况增量：项目标题旁新增按需打开的统计弹窗，汇总当前导航中的各 Workspace 待办、进行中、未归档已完成及今日已完成；主界面不常驻统计。新增完成时间迁移 10 和批量统计 IPC，交互、口径及验证见 6.2.3 节。
+
 2026-10-24 图片输入增量：新建/编辑任务支持剪贴板图片、120px 缩略图、悬停删除及点击放大；图片持久化与两种派发路径见 6.3.1。实际通过的验证及原生 Ctrl+V 未覆盖项见[图片输入验收记录](docs/verification/2026-10-24-kanban-image-input.md)。
 
 更新日期：2026-10-25（新增终端最大化与恢复；修复拖入任务后 Codex 首次回车未提交；新增 Workspace Git 分支显示；新增 Workspace 拖动与 Herdr 双向排序；新增 @ 文件相关性排序、忽略规则与路径/模糊查询；新增首批重构：测试按场景拆分与 Herdr 适配职责提取；修复终端右侧列裁切；修复项目及用户级技能发现；新增异常任务删除；新增 Windows 一键打包与原路径更新；修复 workspace 顺序及关闭后的导航隐藏；移除顶部 Agent 派发栏；修复 Codex 会话归属与命令行恢复；新增启动受理与后台准备；新增卡片 Agent 状态与等待反馈置顶；保留 Skill 候选修复、Herdr workspace 同步、统一任务表单、归档及终端增量）。范围：`kanban/` 的前端、Rust 后端、数据库及构建配置，项目身份与默认目录直接来自 Herdr，已移除 ContextSwitcher 读取。已加入任务独占 pane、右侧交互终端与恢复流程；验证证据和未覆盖项见[验收记录](docs/verification/2026-10-24-kanban-herdr.md)。
@@ -65,6 +67,7 @@ kanban/
 │  ├─ taskFlow.ts                  启动投影列、未决守卫及准备文案
 │  ├─ useTaskFlowUpdates.ts         启动事件、前台 2 秒及焦点对账
 │  ├─ ProjectSidebar.tsx           项目列表、Workspace 拖动排序和管理入口
+│  ├─ TaskOverviewDialog.tsx       按需统计弹窗、本地日界线、查询合并及关闭清理
 │  ├─ ProjectFormDialog.tsx        新建/关联 Herdr workspace、改名及回退目录
 │  ├─ useProjectSync.ts            启动/焦点/前台 15 秒同步、重排与旧响应隔离
 │  ├─ useProjectGitStatus.ts       独立 Git 状态刷新、查询合并及项目/路径响应隔离
@@ -109,6 +112,7 @@ kanban/
 │     ├─ file_search_tests.rs      临时副本、排序截断、忽略规则及路径/模糊查询回归
 │     ├─ skill_discovery_tests.rs  项目/用户技能发现、优先级、去重与截取回归
 │     ├─ tasks.rs                  任务存储、优先级排序、归档事务、已完成批量处理及活跃任务守卫
+│     ├─ task_overview.rs / task_overview_tests.rs  跨项目列计数、今日完成聚合及迁移/日界线验证
 │     ├─ completed_task_tests.rs   批量范围、后台启动投影、部分失败回滚、归档重开与异常删除回归
 │     ├─ agent_status.rs           只读 Agent 发现、完整身份匹配及有效任务归属
 │     ├─ work_commands.rs          派发、修复、终端的 IPC 适配
@@ -263,7 +267,8 @@ flowchart TD
 | `prompt_snapshot` | 最近一次成功派发时实际发送的展开文本，可为空 |
 | `dispatched_at`、`dispatched_to` | 最近一次派发时间与 `workspace/pane_id`，可为空 |
 | `priority` | normal / high / urgent，显示一般 / 优先 / 紧急；默认 normal，SQL CHECK 与 IPC 枚举拒绝非法值 |
-| `archived_at` | 可空归档时间；非空任务不在看板列表和统计中出现，仍保留 done 状态及所有历史 |
+| `archived_at` | 可空归档时间；非空任务不在看板及三列状态计数中出现，仍保留 done 状态及历史；今日已完成单独包含归档任务 |
+| `completed_at`（仅 SQLite） | 迁移 10 新增的可空 UTC RFC3339 完成时间；进入 done 时与状态同条 SQL 写入，已 done 的关闭重试保留原值；进入 todo 或成功进入 in_progress 时清空，编辑/归档不修改；旧记录不从 updated_at 推测回填 |
 | `created_at`、`updated_at` | 创建及最后修改时间；列表按优先级降序、创建时间升序、ID 稳定排序 |
 | `cleanup_required` | 派生布尔值：最近一次 complete 操作 failed/unknown 时为 true；不受后续 start 失败覆盖 |
 
@@ -280,7 +285,7 @@ flowchart TD
 | `workspace_operations` | 创建操作 ID、session、请求、已知 workspace ID、Project ID、pending/unknown/succeeded/failed 与错误；重启 pending 转 unknown |
 | `workspace_exclusions` | 用户本地删除后的 session + workspace ID；防止自动重新导入 |
 | `task_working_directories` | 按任务保存首次启动/派发目录；同步项目目录不覆盖历史上下文 |
-| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 9；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用），初始化可重复执行 |
+| `schema_migrations` | 记录绑定、派发、生命周期与任务字段迁移版本（当前 10；4 加优先级，5 加归档时间，6 加稳定项目身份，7 加后台启动快照，8 加 workspace 导航顺序，9 加图片附件及引用，10 加完成时间与生命周期 task_id 查询索引），初始化可重复执行 |
 | `prompt_images`、`image_drafts` | 图片 ID、项目归属、名称、MIME、字节数、尺寸及内容摘要；草稿按项目/可选任务独立持有，重启释放未保存草稿 |
 | `draft_image_refs`、`task_image_refs`、`operation_image_refs` | 分别保护可撤销的草稿、已保存正文和已受理操作；归档保留引用，删除不抹除已有启动/派发证据 |
 | `image_prompt_snapshots` | 手动图片派发的操作 ID、正文及展开文本；重试同一操作使用同一快照，无实际操作记录的孤儿准备在任务删除/应用重开后释放 |
@@ -312,6 +317,7 @@ Task 上的 `binding`、`flow` 是列表返回的派生字段，不写入旧 tas
 | `update_project` | id、name、可选 fallbackPath | 稳定 ID 改名，读回实际结果并返回 Project |
 | `delete_project` | id | 本地删除并记录排除；不关闭 Herdr workspace/Agent |
 | `list_tasks` | projectId | 项目内未归档 Task[]，优先级降序，同级创建时间升序、ID 稳定排序 |
+| `task_overview` | projectIds、dayStart、dayEnd | 后台线程持数据库锁执行单次聚合；返回各 project_id 的 todo / in_progress / done / today_done；日期参数为本地当天起止转换的 RFC3339 时间，区间左闭右开；不读取提示词或查询 Herdr |
 | `create_task` | projectId、name、priority、可选 promptJson/draftId | 同一事务保存任务及正文图片引用，返回 todo Task；省略正文兼容 `{}`，旧无图调用不需要草稿 |
 | `update_task` | id、name、promptJson、priority、可选 draftId | 同一事务更新正文和图片引用；校验草稿/任务归属，拒绝归档任务，失败保留原数据 |
 | `open_image_draft` | projectId、可选 taskId | 返回草稿 UUID；编辑时保护原任务图片，支持取消和撤销 |
@@ -423,6 +429,18 @@ IPC 使用后台线程执行本地事务。每个去重后的 ID 都在自己的
 当前项目可见时每 3 秒尝试刷新；获得焦点、恢复可见以及任务列表刷新时使旧观察失效并补查。慢请求不重叠，StrictMode 重挂载共享在途请求；隐藏时暂停轮询并清除状态，切项目或卸载不接受旧结果。实时列表不写回 Task/binding/数据库，状态变化不会改变 TerminalPanel 连接身份。查询沿用现有 Herdr CLI 的有界子请求；大量 Agent 或慢进程检查可能延长单轮耗时，不保证严格 3 秒内更新。
 
 验证及限制见[状态验收记录](docs/verification/2026-10-24-kanban-agent-status.md)。
+
+### 6.2.3 任务概况弹窗（2026-10-25）
+
+`App → ProjectSidebar.onOverview → TaskOverviewDialog → api.taskOverview → commands::task_overview → task_overview::read`。入口位于侧栏项目标题旁，主界面只显示按钮；弹窗打开才查询。顶部显示待办、进行中、今日已完成总数，下方按当前导航顺序列出所有 Workspace 的四项计数，包括零任务项目。点击名称关闭弹窗并切换看板。弹窗通过 portal 渲染到 body，背景 root inert，支持关闭按钮、Esc、遮罩点击、焦点循环与关闭后恢复；长列表在弹窗内滚动。
+
+统计只覆盖传入的当前导航项目 ID，不遍历所有任务正文或逐项目调用 `list_tasks`。SQL 按最新生命周期操作与 start_requests 判断 pending/unknown 启动投影，与 `taskColumn` 的开发中显示一致；明确启动失败后恢复原列计数。前三项排除归档任务；今日已完成要求当前投影仍为 done 且 completed_at 位于当天，包含已归档任务。删除或重新打开后不计，重复完成/关闭重试不增加数量。完成清理失败不撤销业务完成，也不撤销完成计数。旧任务完成日期未知时仅计入已完成。
+
+完成时间由 `lifecycle::complete_task` 在写 done 的同条 SQL 中记录；`commands::update_task_status` 的 todo 路径、`lifecycle::activate` 的成功恢复及 `workflow` 的成功派发清空完成时间。后台启动受理时不提前清除，准备期间由列投影排除今日计数；启动失败仍可恢复原完成事实。
+
+前端使用本地日历零点及下一天零点转换为 UTC 参数，不用固定 24 小时推算，兼容夏令时。打开时、启动通知、前台每 2 秒、焦点及恢复可见时刷新，午夜重新计算日期；仅弹窗挂载期间持有计时器和监听。查询串行合并；项目 ID 集合变化或关闭后丢弃旧响应，跨日旧结果不展示。失败显示错误与重试，不把失败显示为零任务；关闭后的后台回复不恢复弹窗。
+
+验证与边界见 [任务概况验收记录](docs/verification/2026-10-25-kanban-task-overview.md)。本次没有增加真实 Herdr 的查询或写操作；真实 Agent 派发/恢复与安装包升级需单独验收。
 
 ### 6.3 @ 文件与 $ 技能引用
 

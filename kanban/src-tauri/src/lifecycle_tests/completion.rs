@@ -9,9 +9,56 @@ fn missing_session_preserves_pane_and_completion_can_be_retried() {
     assert_eq!(status(&app, "a"), "done");
     assert!(app.binding("a").unwrap().target.is_some());
     assert!(fake.0.lock().unwrap().closed.is_empty());
+    let completed: String = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT completed_at FROM tasks WHERE id='a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(chrono::DateTime::parse_from_rfc3339(&completed).is_ok());
+    // Simulate a completion on a previous day; retrying cleanup must not move it.
+    app.db
+        .lock()
+        .unwrap()
+        .execute(
+            "UPDATE tasks SET completed_at='2026-01-01T00:00:00Z' WHERE id='a'",
+            [],
+        )
+        .unwrap();
     fake.0.lock().unwrap().missing_id = false;
     app.complete_task("a", &op()).unwrap();
     assert!(app.binding("a").unwrap().target.is_none());
+    let retained: String = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT completed_at FROM tasks WHERE id='a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_eq!(retained, "2026-01-01T00:00:00Z");
+    app.start_task("a", "", &op()).unwrap();
+    let cleared: Option<String> = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT completed_at FROM tasks WHERE id='a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert!(cleared.is_none());
+    app.complete_task("a", &op()).unwrap();
+    let recompleted: String = app
+        .db
+        .lock()
+        .unwrap()
+        .query_row("SELECT completed_at FROM tasks WHERE id='a'", [], |r| {
+            r.get(0)
+        })
+        .unwrap();
+    assert_ne!(recompleted, retained);
 }
 
 #[test]

@@ -163,6 +163,20 @@ pub fn init(conn: &Connection) -> Result<()> {
     CREATE INDEX IF NOT EXISTS pane_allocation_workspace ON pane_allocations(session,workspace,resolved);",
     )?;
     crate::images::init(conn)?;
+    if !conn.query_row(
+        "SELECT EXISTS(SELECT 1 FROM schema_migrations WHERE version=10)",
+        [],
+        |r| r.get::<_, bool>(0),
+    )? {
+        let tx = conn.unchecked_transaction()?;
+        // Old updated_at values include edits and cleanup retries: do not backfill.
+        tx.execute_batch(
+            "ALTER TABLE tasks ADD COLUMN completed_at TEXT;
+            CREATE INDEX lifecycle_task_history ON lifecycle_operations(task_id);
+            INSERT INTO schema_migrations(version) VALUES (10);",
+        )?;
+        tx.commit()?;
+    }
     Ok(())
 }
 

@@ -646,3 +646,24 @@ kbd { font-family: inherit; font-size: 14px; border: 1px solid currentColor; bor
 .workspace-recovery { padding: 8px 0; overflow-wrap: anywhere; }
 .workspace-recovery select { width: 100%; }
 .workspace-recovery p { margin: 6px 0; font-size: 12px; }
+.overview-dialog { width: 720px; max-width: calc(100vw - 40px); max-height: calc(100dvh - 48px); padding: 0; display: flex; flex-direction: column; overflow: hidden; }
+.overview-header, .overview-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 20px 24px; flex-shrink: 0; }
+.overview-header { border-bottom: 1px solid var(--border); }
+.overview-header h3 { margin: 0 0 6px; }
+.overview-header p, .overview-footer span, .overview-note, .overview-empty { color: var(--text-muted); font-size: 12px; line-height: 1.7; margin: 0; }
+.overview-body { padding: 24px; overflow-y: auto; min-height: 0; }
+.overview-totals { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-bottom: 24px; }
+.overview-totals > div { border: 1px solid var(--border); border-radius: 8px; padding: 14px 16px; display: flex; flex-direction: column; gap: 8px; }
+.overview-totals span { color: var(--text-muted); font-size: 13px; }
+.overview-totals strong { font-size: 28px; font-weight: 600; font-variant-numeric: tabular-nums; }
+.overview-totals > div:last-child strong { color: #3ecf8e; }
+.overview-table-scroll { overflow-x: auto; }
+.overview-table { width: 100%; table-layout: fixed; border-collapse: collapse; font-size: 13px; }
+.overview-table th, .overview-table td { padding: 12px 8px; border-bottom: 1px solid var(--border); text-align: right; font-variant-numeric: tabular-nums; }
+.overview-table thead th { color: var(--text-muted); font-weight: 500; }
+.overview-table th:first-child { width: 36%; text-align: left; }
+.overview-table tbody th { font-weight: 500; }
+.overview-table button { display: block; max-width: 100%; padding: 0; color: var(--text); background: transparent; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: left; }
+.overview-table button:hover { color: #3ecf8e; }
+.overview-note { margin-top: 20px; }
+.overview-footer { padding-top: 14px; padding-bottom: 14px; border-top: 1px solid var(--border); }

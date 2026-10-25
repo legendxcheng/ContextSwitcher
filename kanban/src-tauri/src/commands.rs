@@ -26,6 +26,22 @@ pub fn list_tasks(state: State<DbState>, project_id: String) -> Result<Vec<Task>
 }
 
 #[tauri::command]
+pub async fn task_overview(
+    state: State<'_, DbState>,
+    project_ids: Vec<String>,
+    day_start: String,
+    day_end: String,
+) -> Result<Vec<crate::task_overview::ProjectCounts>, String> {
+    let db = state.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let conn = db.lock().map_err(|e| e.to_string())?;
+        crate::task_overview::read(&conn, &project_ids, &day_start, &day_end)
+    })
+    .await
+    .map_err(|e| e.to_string())?
+}
+
+#[tauri::command]
 pub fn create_task(
     state: State<DbState>,
     project_id: String,
@@ -100,7 +116,7 @@ pub async fn update_task_status(
     }
     let now = Utc::now().to_rfc3339();
     conn.execute(
-        "UPDATE tasks SET status=?1, updated_at=?2 WHERE id=?3",
+        "UPDATE tasks SET status=?1, completed_at=NULL, updated_at=?2 WHERE id=?3",
         params![status, now, id],
     )
     .map_err(|e| e.to_string())?;

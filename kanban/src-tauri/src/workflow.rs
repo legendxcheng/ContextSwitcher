@@ -467,7 +467,7 @@ impl Workflow {
             return Err("dispatch.operation_conflict".into());
         }
         if sent {
-            if tx.execute("UPDATE tasks SET status='in_progress',prompt_snapshot=?1,dispatched_at=?2,dispatched_to=?3,updated_at=?2 WHERE id=?4",
+            if tx.execute("UPDATE tasks SET status='in_progress',completed_at=NULL,prompt_snapshot=?1,dispatched_at=?2,dispatched_to=?3,updated_at=?2 WHERE id=?4",
                 params![op.prompt,op.created_at,format!("{}/{}",op.workspace,op.target.pane_id),op.task_id]).map_err(err)? != 1 { return Err("binding.missing".into()); }
             tx.execute(
                 "UPDATE task_bindings SET state='valid' WHERE task_id=?1",

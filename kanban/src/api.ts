@@ -18,6 +18,9 @@ export const recoverWorkspace = (operationId: string, workspaceId: string | null
 export const deleteProject = (id: string) => invoke<void>("delete_project", { id });
 
 // Tasks
+export interface ProjectCounts { project_id: string; todo: number; in_progress: number; done: number; today_done: number }
+export const taskOverview = (projectIds: string[], dayStart: string, dayEnd: string) =>
+  invoke<ProjectCounts[]>("task_overview", { projectIds, dayStart, dayEnd });
 export const listTasks = (projectId: string) => invoke<Task[]>("list_tasks", { projectId });
 export const createTask = (projectId: string, name: string, priority: TaskPriority, promptJson: string, draftId?: string) =>
   invoke<Task>("create_task", { projectId, name, priority, promptJson, draftId });
